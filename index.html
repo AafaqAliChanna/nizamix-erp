@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head><title>Nizamix</title></head>
+<body>
+  <h2>Students</h2>
+  <ul id="list"></ul>
+
+  <input id="name" placeholder="Full name">
+  <input id="roll" placeholder="Roll number">
+  <input id="class" placeholder="Class">
+  <button onclick="handleAdd()">Add student</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const supabase = window.supabase.createClient('https://ypiamdjdxploowjubibj.supabase.co', 'sb_publishable_Ci3pvImXio3xZ3gk3PTsaA_wZar0bIn');
+    const BAAZ_SCHOOL_ID = 'PASTE_SCHOOL_ID_HERE';
+
+    async function loadStudents() {
+      const { data } = await supabase.from('students').select('*').eq('school_id', BAAZ_SCHOOL_ID);
+      document.getElementById('list').innerHTML =
+        data.map(s => `<li>${s.full_name} — ${s.roll_number} — ${s.class}</li>`).join('');
+    }
+
+    async function handleAdd() {
+      await supabase.from('students').insert({
+        school_id: BAAZ_SCHOOL_ID,
+        full_name: document.getElementById('name').value,
+        roll_number: document.getElementById('roll').value,
+        class: document.getElementById('class').value
+      });
+      loadStudents();
+    }
+
+    loadStudents();
+  </script>
+</body>
+</html>

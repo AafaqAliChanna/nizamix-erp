@@ -1,37 +1,236 @@
 <!DOCTYPE html>
-<html>
-<head><title>Nizamix</title></head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Directory Platform</title>
+    <style>
+        :root {
+            --primary-color: #10b981; /* Premium Emerald */
+            --primary-hover: #059669;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .dashboard-card {
+            width: 100%;
+            max-width: 900px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 32px;
+        }
+
+        h2 {
+            margin-top: 0;
+            margin-bottom: 24px;
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        /* Forms Layout */
+        .input-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) auto;
+            gap: 12px;
+            margin-bottom: 32px;
+            align-items: center;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px 14px;
+            box-sizing: border-box;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.95rem;
+            color: var(--text-main);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+        }
+
+        button {
+            padding: 10px 24px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            white-space: nowrap;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        /* Professional Data Table Layout */
+        .table-container {
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.95rem;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 14px 20px;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: #f8fafc;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 30px;
+            font-style: italic;
+        }
+    </style>
+</head>
 <body>
-  <h2>Students</h2>
-  <ul id="list"></ul>
 
-  <input id="name" placeholder="Full name">
-  <input id="roll" placeholder="Roll number">
-  <input id="class" placeholder="Class">
-  <button onclick="handleAdd()">Add student</button>
+    <div class="dashboard-card">
+        <h2>Student Registry System</h2>
+        
+        <!-- Action Input Controls -->
+        <div class="input-group">
+            <input id="name" placeholder="Full name">
+            <input id="roll" placeholder="Roll number">
+            <input id="class" placeholder="Class">
+            <button onclick="handleAdd()">Add Records</button>
+        </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script>
-    const supabase = window.supabase.createClient('https://ypiamdjdxploowjubibj.supabase.co', 'sb_publishable_Ci3pvImXio3xZ3gk3PTsaA_wZar0bIn');
-    const BAAZ_SCHOOL_ID = 'PASTE_SCHOOL_ID_HERE';
+        <!-- Structured Data Table Matrix -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Full Name</th>
+                        <th>Roll Number</th>
+                        <th>Class</th>
+                    </tr>
+                </thead>
+                <tbody id="list">
+                    <tr>
+                        <td colspan="3" class="empty-state">Initializing ledger database...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-    async function loadStudents() {
-      const { data } = await supabase.from('students').select('*').eq('school_id', BAAZ_SCHOOL_ID);
-      document.getElementById('list').innerHTML =
-        data.map(s => `<li>${s.full_name} — ${s.roll_number} — ${s.class}</li>`).join('');
-    }
+    <!-- YOUR REQUESTED LINKS INTEGRATED BELOW -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <script>
+        // Changed to 'supabaseClient' to fix the duplicate declaration error
+        const supabaseClient = window.supabase.createClient('https://ypiamdjdxploowjubibj.supabase.co', 'sb_publishable_Ci3pvImXio3xZ3gk3PTsaA_wZar0bIn');
+        const BAAZ_SCHOOL_ID = '61c4ad6a-395c-47ec-8a4d-122d28ff757e';
 
-    async function handleAdd() {
-      await supabase.from('students').insert({
-        school_id: BAAZ_SCHOOL_ID,
-        full_name: document.getElementById('name').value,
-        roll_number: document.getElementById('roll').value,
-        class: document.getElementById('class').value
-      });
-      loadStudents();
-    }
+        // Fetching platform dataset matrix
+        async function loadStudents() {
+            const { data, error } = await supabaseClient.from('students').select('*').eq('school_id', BAAZ_SCHOOL_ID);
+            if (error) {
+                console.error('Failed to load students', error);
+                document.getElementById('list').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Database connection error: ${error.message}</td></tr>`;
+                return;
+            }
+            
+            const students = data ?? [];
+            if (students.length === 0) {
+                document.getElementById('list').innerHTML = '<tr><td colspan="3" class="empty-state">No student profiles registered under this institution entry.</td></tr>';
+                return;
+            }
 
-    loadStudents();
-  </script>
+            document.getElementById('list').innerHTML = 
+                students.map(s => `
+                    <tr>
+                        <td style="font-weight: 500;">${s.full_name}</td>
+                        <td style="color: var(--text-muted); font-family: monospace;">${s.roll_number}</td>
+                        <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">${s['class'] ?? 'N/A'}</span></td>
+                    </tr>
+                `).join('');
+        }
+
+        // Appending new client entry configurations
+        async function handleAdd() {
+            const nameEl = document.getElementById('name');
+            const rollEl = document.getElementById('roll');
+            const classEl = document.getElementById('class');
+
+            if (!nameEl.value || !rollEl.value) {
+                alert("Please fill in both the Full Name and Roll Number fields.");
+                return;
+            }
+
+            const payload = {
+                school_id: BAAZ_SCHOOL_ID,
+                full_name: nameEl.value,
+                roll_number: rollEl.value,
+                class: classEl.value
+            };
+
+            const { data, error } = await supabaseClient.from('students').insert(payload);
+            if (error) {
+                console.error(error);
+                alert("Write transaction rejected: " + error.message);
+                return;
+            }
+
+            nameEl.value = '';
+            rollEl.value = '';
+            classEl.value = '';
+            await loadStudents();
+        }
+
+        // Run application sequence
+        loadStudents();
+    </script>
 </body>
 </html>

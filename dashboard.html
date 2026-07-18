@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BAAZ GRAMMER SCHOOL - ERP Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #1e40af;
+            --primary-dark: #1e3a8a;
+            --secondary: #0ea5e9;
+            --accent: #f59e0b;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f97316;
+            --bg-light: #f8fafc;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-dark: #0f172a;
+            --text-light: #64748b;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Roboto', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-light);
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            height: 100vh;
+            left: 0;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .school-logo {
+            display: flex;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .school-logo-icon {
+            width: 45px;
+            height: 45px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-right: 12px;
+        }
+
+        .school-info h1 {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        .school-info p {
+            font-size: 11px;
+            opacity: 0.9;
+        }
+
+        .nav-menu {
+            list-style: none;
+        }
+
+        .nav-item {
+            margin-bottom: 8px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            color: rgba(255, 255, 255, 0.85);
+            text-decoration: none;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            padding-left: 20px;
+        }
+
+        .nav-link i {
+            width: 20px;
+            margin-right: 12px;
+            text-align: center;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .header {
+            background: var(--card-bg);
+            padding: 20px 30px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .header-left h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-dark);
+            margin: 0;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 16px;
+            background: var(--bg-light);
+            border-radius: 8px;
+        }
+
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            background: var(--secondary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .content {
+            padding: 30px;
+            flex: 1;
+        }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .stat-card h4 {
+            font-size: 13px;
+            color: var(--text-light);
+            margin: 0 0 10px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary);
+            margin: 0;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 16px -2px rgba(0, 0, 0, 0.1);
+            border-color: var(--secondary);
+        }
+
+        .card-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+
+        .card-icon.students {
+            background: rgba(30, 64, 175, 0.1);
+            color: var(--primary);
+        }
+
+        .card-icon.attendance {
+            background: rgba(14, 165, 233, 0.1);
+            color: var(--secondary);
+        }
+
+        .card-icon.fees {
+            background: rgba(249, 158, 11, 0.1);
+            color: var(--accent);
+        }
+
+        .card-icon.academics {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+
+        .card-icon.staff {
+            background: rgba(139, 92, 246, 0.1);
+            color: #8b5cf6;
+        }
+
+        .card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-dark);
+        }
+
+        .card p {
+            font-size: 13px;
+            color: var(--text-light);
+            margin: 0;
+        }
+
+        .stat-number {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: 10px;
+        }
+
+        .page { display: none; }
+        .page.active { display: block; }
+
+        .table-container {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: var(--bg-light);
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-dark);
+            border-bottom: 2px solid var(--border-color);
+            text-transform: uppercase;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+
+        tr:hover { background-color: var(--bg-light); }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: var(--bg-light);
+            color: var(--text-dark);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .badge-warning { background: rgba(249, 158, 11, 0.1); color: var(--accent); }
+        .badge-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+
+        @media (max-width: 768px) {
+            .sidebar { width: 70px; padding: 15px 10px; }
+            .school-info { display: none; }
+            .nav-link span { display: none; }
+            .main-content { margin-left: 70px; }
+            .cards-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="school-logo">
+                <div class="school-logo-icon">
+                    <i class="fas fa-school"></i>
+                </div>
+                <div class="school-info">
+                    <h1>BAAZ</h1>
+                    <p>GRAMMER SCHOOL</p>
+                </div>
+            </div>
+
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <button class="nav-link active" onclick="showPage('dashboard')">
+                        <i class="fas fa-gauge"></i>
+                        <span>Dashboard</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('students')">
+                        <i class="fas fa-users"></i>
+                        <span>Students</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('attendance')">
+                        <i class="fas fa-clipboard-check"></i>
+                        <span>Attendance</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('fees')">
+                        <i class="fas fa-receipt"></i>
+                        <span>Fees</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('academics')">
+                        <i class="fas fa-book"></i>
+                        <span>Academics</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('staff')">
+                        <i class="fas fa-person-chalkboard"></i>
+                        <span>Staff</span>
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('reports')">
+                        <i class="fas fa-chart-bar"></i>
+                        <span>Reports</span>
+                    </button>
+                </li>
+            </ul>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-left">
+                    <h2 id="pageTitle">Dashboard</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-menu">
+                        <div class="user-avatar">A</div>
+                        <div>
+                            <strong style="display: block; font-size: 13px;">Admin</strong>
+                            <small style="color: var(--text-light);">Principal</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Content -->
+            <div class="content">
+                <!-- Dashboard Page -->
+                <div class="page active" id="dashboard">
+                    <div class="stats-row">
+                        <div class="stat-card">
+                            <h4>Total Students</h4>
+                            <p class="value">1,245</p>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Staff Members</h4>
+                            <p class="value">52</p>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Attendance Today</h4>
+                            <p class="value">95%</p>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Pending Fees</h4>
+                            <p class="value">Rs. 524K</p>
+                        </div>
+                    </div>
+
+                    <div class="cards-grid">
+                        <div class="card" onclick="showPage('students')">
+                            <div class="card-icon students"><i class="fas fa-users"></i></div>
+                            <h3>Student Management</h3>
+                            <p>Manage student records, profiles and enrollment</p>
+                            <div class="stat-number">1,245</div>
+                        </div>
+
+                        <div class="card" onclick="showPage('attendance')">
+                            <div class="card-icon attendance"><i class="fas fa-clipboard-check"></i></div>
+                            <h3>Attendance Tracking</h3>
+                            <p>Track daily attendance and generate reports</p>
+                            <div class="stat-number">95%</div>
+                        </div>
+
+                        <div class="card" onclick="showPage('fees')">
+                            <div class="card-icon fees"><i class="fas fa-receipt"></i></div>
+                            <h3>Fee Management</h3>
+                            <p>Process and track student fee payments</p>
+                            <div class="stat-number">Rs. 524K</div>
+                        </div>
+
+                        <div class="card" onclick="showPage('academics')">
+                            <div class="card-icon academics"><i class="fas fa-book"></i></div>
+                            <h3>Academic Records</h3>
+                            <p>Manage grades, subjects, and performance</p>
+                            <div class="stat-number">18</div>
+                        </div>
+
+                        <div class="card" onclick="showPage('staff')">
+                            <div class="card-icon staff"><i class="fas fa-person-chalkboard"></i></div>
+                            <h3>Staff Directory</h3>
+                            <p>Manage staff information and assignments</p>
+                            <div class="stat-number">52</div>
+                        </div>
+
+                        <div class="card" onclick="showPage('reports')">
+                            <div class="card-icon"><i class="fas fa-chart-bar" style="color: var(--danger);"></i></div>
+                            <h3>Reports & Analytics</h3>
+                            <p>View detailed school reports and statistics</p>
+                            <div class="stat-number">12+</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Students Page -->
+                <div class="page" id="students">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
+                        <div>
+                            <h2 style="margin: 0;">Student Management</h2>
+                            <p style="color: var(--text-light); margin: 5px 0 0 0;">Manage all student records</p>
+                        </div>
+                        <button class="btn btn-primary"><i class="fas fa-plus"></i> Add Student</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Roll No</th>
+                                    <th>Name</th>
+                                    <th>Class</th>
+                                    <th>Father Name</th>
+                                    <th>Phone</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>001</td><td>Muhammad Ali</td><td>Class 10-A</td><td>Hassan Khan</td><td>+92 300 1234567</td><td><span class="badge badge-success">Active</span></td></tr>
+                                <tr><td>002</td><td>Fatima Ahmed</td><td>Class 9-B</td><td>Ahmed Khan</td><td>+92 300 2345678</td><td><span class="badge badge-success">Active</span></td></tr>
+                                <tr><td>003</td><td>Ali Raza</td><td>Class 8-A</td><td>Raza Ahmad</td><td>+92 300 3456789</td><td><span class="badge badge-warning">Suspended</span></td></tr>
+                                <tr><td>004</td><td>Ayesha Khan</td><td>Class 7-C</td><td>Khan Sahab</td><td>+92 300 4567890</td><td><span class="badge badge-success">Active</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Attendance Page -->
+                <div class="page" id="attendance">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
+                        <div>
+                            <h2 style="margin: 0;">Attendance Tracking</h2>
+                            <p style="color: var(--text-light); margin: 5px 0 0 0;">Record and track student attendance</p>
+                        </div>
+                        <button class="btn btn-primary"><i class="fas fa-plus"></i> Mark Attendance</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student Name</th>
+                                    <th>Roll No</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                    <th>Percentage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Muhammad Ali</td><td>001</td><td>17-Jul-2024</td><td><span class="badge badge-success">Present</span></td><td>98%</td></tr>
+                                <tr><td>Fatima Ahmed</td><td>002</td><td>17-Jul-2024</td><td><span class="badge badge-success">Present</span></td><td>96%</td></tr>
+                                <tr><td>Ali Raza</td><td>003</td><td>17-Jul-2024</td><td><span class="badge badge-danger">Absent</span></td><td>78%</td></tr>
+                                <tr><td>Ayesha Khan</td><td>004</td><td>17-Jul-2024</td><td><span class="badge badge-warning">Leave</span></td><td>92%</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Fees Page -->
+                <div class="page" id="fees">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
+                        <div>
+                            <h2 style="margin: 0;">Fee Management</h2>
+                            <p style="color: var(--text-light); margin: 5px 0 0 0;">Track and manage student fees</p>
+                        </div>
+                        <button class="btn btn-primary"><i class="fas fa-plus"></i> Record Payment</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student Name</th>
+                                    <th>Roll No</th>
+                                    <th>Monthly Fee</th>
+                                    <th>Paid Amount</th>
+                                    <th>Due Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Muhammad Ali</td><td>001</td><td>Rs. 5,000</td><td>Rs. 5,000</td><td>Rs. 0</td><td><span class="badge badge-success">Paid</span></td></tr>
+                                <tr><td>Fatima Ahmed</td><td>002</td><td>Rs. 5,000</td><td>Rs. 10,000</td><td>Rs. 0</td><td><span class="badge badge-success">Paid</span></td></tr>
+                                <tr><td>Ali Raza</td><td>003</td><td>Rs. 5,000</td><td>Rs. 0</td><td>Rs. 15,000</td><td><span class="badge badge-danger">Pending</span></td></tr>
+                                <tr><td>Ayesha Khan</td><td>004</td><td>Rs. 5,000</td><td>Rs. 5,000</td><td>Rs. 5,000</td><td><span class="badge badge-warning">Partial</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Academics Page -->
+                <div class="page" id="academics">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
+                        <div>
+                            <h2 style="margin: 0;">Academic Records</h2>
+                            <p style="color: var(--text-light); margin: 5px 0 0 0;">Manage grades and academic performance</p>
+                        </div>
+                        <button class="btn btn-primary"><i class="fas fa-plus"></i> Add Grade</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student Name</th>
+                                    <th>Class</th>
+                                    <th>Subject</th>
+                                    <th>Marks</th>
+                                    <th>Grade</th>
+                                    <th>Remarks</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Muhammad Ali</td><td>10-A</td><td>English</td><td>85/100</td><td><span class="badge badge-success">A</span></td><td>Good</td></tr>
+                                <tr><td>Muhammad Ali</td><td>10-A</td><td>Mathematics</td><td>92/100</td><td><span class="badge badge-success">A+</span></td><td>Excellent</td></tr>
+                                <tr><td>Fatima Ahmed</td><td>9-B</td><td>Urdu</td><td>88/100</td><td><span class="badge badge-success">A</span></td><td>Good</td></tr>
+                                <tr><td>Ali Raza</td><td>8-A</td><td>Science</td><td>72/100</td><td><span class="badge badge-warning">B</span></td><td>Satisfactory</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Staff Page -->
+                <div class="page" id="staff">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 30px;">
+                        <div>
+                            <h2 style="margin: 0;">Staff Directory</h2>
+                            <p style="color: var(--text-light); margin: 5px 0 0 0;">Manage staff information</p>
+                        </div>
+                        <button class="btn btn-primary"><i class="fas fa-plus"></i> Add Staff</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Designation</th>
+                                    <th>Department</th>
+                                    <th>Email</th>
+                                    <th>Phone</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Dr. Muhammad Hassan</td><td>Principal</td><td>Administration</td><td>principal@baaz.edu</td><td>+92 300 0000001</td><td><span class="badge badge-success">Active</span></td></tr>
+                                <tr><td>Miss Ayesha Malik</td><td>English Teacher</td><td>Languages</td><td>ayesha.malik@baaz.edu</td><td>+92 300 0000002</td><td><span class="badge badge-success">Active</span></td></tr>
+                                <tr><td>Mr. Farhan Ahmed</td><td>Math Teacher</td><td>Science</td><td>farhan.ahmed@baaz.edu</td><td>+92 300 0000003</td><td><span class="badge badge-success">Active</span></td></tr>
+                                <tr><td>Ms. Saira Khan</td><td>Accountant</td><td>Finance</td><td>saira.khan@baaz.edu</td><td>+92 300 0000004</td><td><span class="badge badge-success">Active</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Reports Page -->
+                <div class="page" id="reports">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Reports & Analytics</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">View school reports and statistics</p>
+                    </div>
+
+                    <div class="cards-grid">
+                        <div class="card">
+                            <div class="card-icon students"><i class="fas fa-chart-pie"></i></div>
+                            <h3>Enrollment Report</h3>
+                            <p>View class-wise student distribution</p>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-icon attendance"><i class="fas fa-chart-line"></i></div>
+                            <h3>Attendance Report</h3>
+                            <p>Monthly attendance trends</p>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-icon fees"><i class="fas fa-chart-bar"></i></div>
+                            <h3>Fee Collection Report</h3>
+                            <p>Financial overview and collections</p>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-icon academics"><i class="fas fa-star"></i></div>
+                            <h3>Academic Performance</h3>
+                            <p>Class and subject wise results</p>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-icon staff"><i class="fas fa-users"></i></div>
+                            <h3>Staff Report</h3>
+                            <p>Staff strength and distribution</p>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-icon"><i class="fas fa-file-pdf"></i></div>
+                            <h3>Export Reports</h3>
+                            <p>Download reports in PDF/Excel</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function showPage(pageId) {
+            const pages = document.querySelectorAll('.page');
+            pages.forEach(page => page.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+
+            const navLinks = document.querySelectorAll('.nav-link');
+            navLinks.forEach(link => link.classList.remove('active'));
+            event.target.closest('.nav-link').classList.add('active');
+
+            const titles = {
+                'dashboard': 'Dashboard',
+                'students': 'Student Management',
+                'attendance': 'Attendance Tracking',
+                'fees': 'Fee Management',
+                'academics': 'Academic Records',
+                'staff': 'Staff Directory',
+                'reports': 'Reports & Analytics'
+            };
+            document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';
+        }
+    </script>
+</body>
+</html>

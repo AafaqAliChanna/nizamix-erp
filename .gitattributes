@@ -1,0 +1,7 @@
+# GitHub Language Detection
+*.html linguist-language=HTML
+*.js linguist-language=JavaScript
+*.sql linguist-language=SQL
+
+# Ensure proper language distribution detection
+* text=auto

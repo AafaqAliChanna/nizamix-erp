@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -494,6 +495,13 @@
                         <span>Staff</span>
                     </button>
                 </li>
+                <!-- NEW (Step 3): Attendance nav link, same pattern as Students/Staff above -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('attendance')">
+                        <i class="fas fa-calendar-check"></i>
+                        <span>Attendance</span>
+                    </button>
+                </li>
             </ul>
 
             <button class="logout-btn" onclick="handleLogout()">
@@ -609,6 +617,50 @@
                         </table>
                     </div>
                 </div>
+
+                <!-- NEW (Step 3): Attendance Page. Same structure as the Students page above -
+                     a .table-container with an .input-group for the "mark attendance" controls,
+                     then a second .table-container below it showing the attendance history. -->
+                <div class="page" id="attendance">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Attendance</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Mark and view daily attendance</p>
+                    </div>
+
+                    <!-- Mark attendance controls: dropdown of students (filled by populateStudentDropdown),
+                         a date picker, present/absent choice, and a Mark button. -->
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <div class="input-group">
+                            <select id="attendanceStudent" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
+                            <input id="attendanceDate" type="date">
+                            <select id="attendanceStatus" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                                <option value="present">Present</option>
+                                <option value="absent">Absent</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="handleMarkAttendance()">
+                                <i class="fas fa-check"></i> Mark
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Attendance history table, filled by loadAttendance() -->
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attendanceList">
+                                <tr>
+                                    <td colspan="3" class="empty-state">Loading attendance...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -677,6 +729,10 @@
         async function loadData() {
             await loadStudents();
             await loadStaff();
+            // NEW (Step 3): also load attendance data and fill the student dropdown
+            // used in the "Mark Attendance" form, every time the app loads.
+            await populateStudentDropdown();
+            await loadAttendance();
         }
 
         async function loadStudents() {
@@ -737,6 +793,89 @@
                 `).join('');
         }
 
+        // NEW (Step 3): fills the <select id="attendanceStudent"> dropdown with every
+        // student at this school, so you can pick who you're marking attendance for.
+        async function populateStudentDropdown() {
+            const { data, error } = await supabaseClient
+                .from('students')
+                .select('id, full_name')
+                .eq('school_id', BAAZ_SCHOOL_ID);
+
+            if (error) {
+                console.error('Failed to load students for dropdown:', error);
+                return;
+            }
+
+            document.getElementById('attendanceStudent').innerHTML = (data || [])
+                .map(s => `<option value="${s.id}">${s.full_name}</option>`).join('');
+        }
+
+        // NEW (Step 3): runs when you click "Mark". Reads the selected student, date,
+        // and status, then writes it to the attendance table. Uses upsert (not insert) -
+        // meaning if you mark the SAME student on the SAME date twice, it updates the
+        // existing row instead of creating a duplicate. This relies on the
+        // unique (student_id, date) constraint set up in the SQL schema.
+        async function handleMarkAttendance() {
+            const studentId = document.getElementById('attendanceStudent').value;
+            const date = document.getElementById('attendanceDate').value;
+            const status = document.getElementById('attendanceStatus').value;
+
+            if (!studentId) {
+                alert('No students found - add a student first.');
+                return;
+            }
+            if (!date) {
+                alert('Please pick a date.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('attendance').upsert({
+                school_id: BAAZ_SCHOOL_ID,
+                student_id: studentId,
+                date: date,
+                status: status
+            }, { onConflict: 'student_id,date' });
+
+            if (error) {
+                alert('Error marking attendance: ' + error.message);
+                return;
+            }
+
+            await loadAttendance();
+        }
+
+        // NEW (Step 3): loads attendance history and shows it in the table.
+        // select('date, status, students(full_name)') is a JOIN - it pulls the
+        // student's name from the students table using the student_id foreign key,
+        // so we can display "Ayesha Khan" instead of a raw student_id UUID.
+        async function loadAttendance() {
+            const { data, error } = await supabaseClient
+                .from('attendance')
+                .select('date, status, students(full_name)')
+                .eq('school_id', BAAZ_SCHOOL_ID)
+                .order('date', { ascending: false });
+
+            if (error) {
+                document.getElementById('attendanceList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const records = data || [];
+            if (records.length === 0) {
+                document.getElementById('attendanceList').innerHTML = '<tr><td colspan="3" class="empty-state">No attendance marked yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('attendanceList').innerHTML = records
+                .map(a => `
+                    <tr>
+                        <td style="font-weight: 500;">${a.students.full_name}</td>
+                        <td style="color: var(--text-light); font-family: monospace;">${a.date}</td>
+                        <td><span style="background: ${a.status === 'present' ? '#dcfce7' : '#fee2e2'}; color: ${a.status === 'present' ? '#166534' : '#991b1b'}; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; text-transform: capitalize;">${a.status}</span></td>
+                    </tr>
+                `).join('');
+        }
+
         function showAddStudentForm() {
             document.getElementById('addStudentForm').style.display = 'block';
             document.getElementById('studentName').focus();
@@ -787,7 +926,8 @@
             const titles = {
                 'dashboard': 'Dashboard',
                 'students': 'Student Management',
-                'staff': 'Staff Directory'
+                'staff': 'Staff Directory',
+                'attendance': 'Attendance'
             };
             document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';
         }

@@ -138,3 +138,25 @@ For updates, improvements, or customization of the BAAZ GRAMMER SCHOOL ERP Syste
 **Version:** 1.0.0
 **Last Updated:** July 2024
 **Status:** Production Ready (Frontend)
+
+# Nizamix ERP
+
+Multi-tenant school management system for Pakistani schools. Built for a real
+pilot customer: Baaz Grammar School, Karachi.
+
+## Stack
+- Frontend: HTML + JavaScript (Supabase JS client) — no framework yet, chosen
+  for shipping speed
+- Backend/Database: Supabase (PostgreSQL), with Row Level Security enforcing
+  multi-tenant data isolation
+- Auth: Supabase Auth (email/password)
+
+## Status
+- ✅ Student records
+- ✅ Staff directory + authentication
+- ✅ Attendance (mark present/absent, history view)
+- 🔜 Next module TBD, pending customer feedback
+
+## Architecture
+One codebase, one database — every school isolated by `school_id` via RLS,
+not a separate deployment per school.

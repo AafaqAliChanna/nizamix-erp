@@ -494,6 +494,13 @@
                         <span>Staff</span>
                     </button>
                 </li>
+                <!-- NEW: Classes nav link, same pattern as Students/Staff above -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('classes')">
+                        <i class="fas fa-chalkboard"></i>
+                        <span>Classes</span>
+                    </button>
+                </li>
                 <!-- NEW (Step 3): Attendance nav link, same pattern as Students/Staff above -->
                 <li class="nav-item">
                     <button class="nav-link" onclick="showPage('attendance')">
@@ -619,29 +626,97 @@
                     </div>
                 </div>
 
-                <!-- NEW (Step 3): Attendance Page. Same structure as the Students page above -
-                     a .table-container with an .input-group for the "mark attendance" controls,
-                     then a second .table-container below it showing the attendance history. -->
+                <!-- NEW: Classes Page. Lists every class for this school; clicking a class
+                     opens that class's student list with attendance controls right there,
+                     using the same student-row markup as the Attendance page below. -->
+                <div class="page" id="classes">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Classes</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Select a class to view its students and mark attendance</p>
+                    </div>
+
+                    <!-- Class list view -->
+                    <div id="classListView" class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Students</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="classesList">
+                                <tr><td colspan="3" class="empty-state">Loading classes...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Class detail view: hidden until a class is clicked. Shows that
+                         class's students with a date + status per row, saved with one button. -->
+                    <div id="classDetailView" style="display: none;">
+                        <div style="margin-bottom: 16px;">
+                            <button class="btn" onclick="backToClassList()"><i class="fas fa-arrow-left"></i> Back to Classes</button>
+                        </div>
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <div class="input-group">
+                                <h3 id="classDetailTitle" style="margin: 0; align-self: center;"></h3>
+                                <input id="classAttendanceDate" type="date">
+                                <button class="btn btn-primary" onclick="saveClassAttendance()">
+                                    <i class="fas fa-check"></i> Save Attendance
+                                </button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Roll No.</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="classStudentsList">
+                                    <tr><td colspan="3" class="empty-state">Loading students...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- NEW (Step 3, reworked): Attendance Page. Now class-first - pick a class,
+                     its students appear with a status dropdown each, save all at once with
+                     one button. History table below is unchanged. -->
                 <div class="page" id="attendance">
                     <div style="margin-bottom: 30px;">
                         <h2 style="margin: 0;">Attendance</h2>
-                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Mark and view daily attendance</p>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Select a class, then mark attendance for its students</p>
                     </div>
 
-                    <!-- Mark attendance controls: dropdown of students (filled by populateStudentDropdown),
-                         a date picker, present/absent choice, and a Mark button. -->
+                    <!-- Class + date picker: choosing a class fills the table below via loadAttendanceClassStudents() -->
                     <div class="table-container" style="margin-bottom: 24px;">
                         <div class="input-group">
-                            <select id="attendanceStudent" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
+                            <select id="attendanceClassFilter" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;" onchange="loadAttendanceClassStudents()"></select>
                             <input id="attendanceDate" type="date">
-                            <select id="attendanceStatus" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
-                                <option value="present">Present</option>
-                                <option value="absent">Absent</option>
-                            </select>
-                            <button class="btn btn-primary" onclick="handleMarkAttendance()">
-                                <i class="fas fa-check"></i> Mark
+                            <button class="btn btn-primary" onclick="saveAttendancePageBulk()">
+                                <i class="fas fa-check"></i> Save Attendance
                             </button>
                         </div>
+                    </div>
+
+                    <!-- Students of the selected class, filled by loadAttendanceClassStudents() -->
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student</th>
+                                    <th>Roll No.</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attendanceMarkList">
+                                <tr><td colspan="3" class="empty-state">Select a class above</td></tr>
+                            </tbody>
+                        </table>
                     </div>
 
                     <!-- Attendance history table, filled by loadAttendance() -->
@@ -733,7 +808,9 @@
             await populateClassDropdown();
             await loadStudents();
             await loadStaff();
-            await populateStudentDropdown();
+            // NEW: Classes page list, and the class filter on the Attendance page.
+            await loadClassesList();
+            await populateAttendanceClassFilter();
             await loadAttendance();
         }
 
@@ -824,55 +901,176 @@
                 `).join('');
         }
 
-        // NEW (Step 3): fills the <select id="attendanceStudent"> dropdown with every
-        // student at this school, so you can pick who you're marking attendance for.
-        async function populateStudentDropdown() {
-            const { data, error } = await supabaseClient
-                .from('students')
-                .select('id, full_name')
-                .eq('school_id', BAAZ_SCHOOL_ID);
+        // ---- Classes page + class-based attendance (shared helpers) ----
 
-            if (error) {
-                console.error('Failed to load students for dropdown:', error);
-                return;
-            }
-
-            document.getElementById('attendanceStudent').innerHTML = (data || [])
-                .map(s => `<option value="${s.id}">${s.full_name}</option>`).join('');
+        // Today's date as YYYY-MM-DD, used to default every date picker.
+        function todayStr() {
+            return new Date().toISOString().split('T')[0];
         }
 
-        // NEW (Step 3): runs when you click "Mark". Reads the selected student, date,
-        // and status, then writes it to the attendance table. Uses upsert (not insert) -
-        // meaning if you mark the SAME student on the SAME date twice, it updates the
-        // existing row instead of creating a duplicate. This relies on the
-        // unique (student_id, date) constraint set up in the SQL schema.
-        async function handleMarkAttendance() {
-            const studentId = document.getElementById('attendanceStudent').value;
-            const date = document.getElementById('attendanceDate').value;
-            const status = document.getElementById('attendanceStatus').value;
-
-            if (!studentId) {
-                alert('No students found - add a student first.');
+        // Renders one <tr> per student into a table body, each with a Present/Absent
+        // dropdown. Used by both the Classes page detail view and the Attendance page.
+        // data-student-id on the <tr> is how we read back who's being marked.
+        function renderAttendanceRows(students, tbodyId) {
+            const tbody = document.getElementById(tbodyId);
+            if (!students || students.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No students in this class yet</td></tr>';
                 return;
             }
+            tbody.innerHTML = students.map(s => `
+                <tr data-student-id="${s.id}">
+                    <td style="font-weight: 500;">${s.full_name}</td>
+                    <td style="color: var(--text-light); font-family: monospace;">${s.roll_number || 'N/A'}</td>
+                    <td>
+                        <select style="padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px;">
+                            <option value="present">Present</option>
+                            <option value="absent">Absent</option>
+                        </select>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Reads every row in a table body (built by renderAttendanceRows) and upserts
+        // one attendance row per student for the given date. Same upsert + unique
+        // (student_id, date) approach as before, just looped over a whole class.
+        async function saveAttendanceRows(tbodyId, dateInputId) {
+            const date = document.getElementById(dateInputId).value;
             if (!date) {
                 alert('Please pick a date.');
                 return;
             }
-
-            const { error } = await supabaseClient.from('attendance').upsert({
-                school_id: BAAZ_SCHOOL_ID,
-                student_id: studentId,
-                date: date,
-                status: status
-            }, { onConflict: 'student_id,date' });
-
-            if (error) {
-                alert('Error marking attendance: ' + error.message);
+            const rows = document.querySelectorAll(`#${tbodyId} tr[data-student-id]`);
+            if (rows.length === 0) {
+                alert('No students to mark.');
                 return;
             }
 
+            const records = Array.from(rows).map(row => ({
+                school_id: BAAZ_SCHOOL_ID,
+                student_id: row.dataset.studentId,
+                date: date,
+                status: row.querySelector('select').value
+            }));
+
+            const { error } = await supabaseClient
+                .from('attendance')
+                .upsert(records, { onConflict: 'student_id,date' });
+
+            if (error) {
+                alert('Error saving attendance: ' + error.message);
+                return;
+            }
+
+            alert('Attendance saved for ' + records.length + ' student(s).');
             await loadAttendance();
+        }
+
+        // Fetches every student in one class, school-scoped like everywhere else.
+        async function getStudentsForClass(classId) {
+            const { data, error } = await supabaseClient
+                .from('students')
+                .select('id, full_name, roll_number')
+                .eq('school_id', BAAZ_SCHOOL_ID)
+                .eq('class_id', classId);
+
+            if (error) {
+                console.error('Failed to load students for class:', error);
+                return [];
+            }
+            return data || [];
+        }
+
+        // ---- Classes page ----
+
+        // Lists every class as a row with a "View Students" button.
+        async function loadClassesList() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section, students(count)')
+                .eq('school_id', BAAZ_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                document.getElementById('classesList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const classes = data || [];
+            if (classes.length === 0) {
+                document.getElementById('classesList').innerHTML = '<tr><td colspan="3" class="empty-state">No classes added yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('classesList').innerHTML = classes.map(c => {
+                const label = `Grade ${c.grade}${c.section ? '-' + c.section : ''}`;
+                const count = c.students?.[0]?.count ?? 0;
+                return `
+                    <tr>
+                        <td style="font-weight: 500;">${label}</td>
+                        <td>${count}</td>
+                        <td><button class="btn btn-primary" onclick="viewClass('${c.id}', '${label}')">View Students</button></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Opens the detail view for one class: hides the list, shows that class's
+        // students with today's date pre-filled, ready to mark attendance right here.
+        async function viewClass(classId, label) {
+            document.getElementById('classListView').style.display = 'none';
+            document.getElementById('classDetailView').style.display = 'block';
+            document.getElementById('classDetailView').dataset.classId = classId;
+            document.getElementById('classDetailTitle').textContent = label;
+            document.getElementById('classAttendanceDate').value = todayStr();
+
+            const students = await getStudentsForClass(classId);
+            renderAttendanceRows(students, 'classStudentsList');
+        }
+
+        function backToClassList() {
+            document.getElementById('classDetailView').style.display = 'none';
+            document.getElementById('classListView').style.display = 'block';
+        }
+
+        async function saveClassAttendance() {
+            await saveAttendanceRows('classStudentsList', 'classAttendanceDate');
+        }
+
+        // ---- Attendance page (class-first) ----
+
+        // Fills the class dropdown at the top of the Attendance page.
+        async function populateAttendanceClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', BAAZ_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for attendance filter:', error);
+                return;
+            }
+
+            document.getElementById('attendanceClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+            document.getElementById('attendanceDate').value = todayStr();
+        }
+
+        // Runs when the class dropdown on the Attendance page changes.
+        async function loadAttendanceClassStudents() {
+            const classId = document.getElementById('attendanceClassFilter').value;
+            if (!classId) {
+                document.getElementById('attendanceMarkList').innerHTML = '<tr><td colspan="3" class="empty-state">Select a class above</td></tr>';
+                return;
+            }
+            const students = await getStudentsForClass(classId);
+            renderAttendanceRows(students, 'attendanceMarkList');
+        }
+
+        async function saveAttendancePageBulk() {
+            await saveAttendanceRows('attendanceMarkList', 'attendanceDate');
         }
 
         // NEW (Step 3): loads attendance history and shows it in the table.
@@ -960,6 +1158,7 @@
                 'dashboard': 'Dashboard',
                 'students': 'Student Management',
                 'staff': 'Staff Directory',
+                'classes': 'Classes',
                 'attendance': 'Attendance'
             };
             document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';

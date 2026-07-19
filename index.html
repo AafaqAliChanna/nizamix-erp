@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -568,7 +567,9 @@
                             <div class="input-group">
                                 <input id="studentName" placeholder="Full name">
                                 <input id="studentRoll" placeholder="Roll number">
-                                <input id="studentClass" placeholder="Class">
+                                <!-- NEW (Step 4): real dropdown fed from the classes table,
+                                     instead of a free-text field. Filled by populateClassDropdown(). -->
+                                <select id="studentClass" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
                                 <button class="btn btn-primary" onclick="handleAddStudent()">Save</button>
                                 <button class="btn btn-secondary" onclick="hideAddStudentForm()">Cancel</button>
                             </div>
@@ -727,18 +728,22 @@
         }
 
         async function loadData() {
+            // NEW (Step 4): load real classes before students, so the class
+            // dropdown in "Add Student" is ready before anyone opens that form.
+            await populateClassDropdown();
             await loadStudents();
             await loadStaff();
-            // NEW (Step 3): also load attendance data and fill the student dropdown
-            // used in the "Mark Attendance" form, every time the app loads.
             await populateStudentDropdown();
             await loadAttendance();
         }
 
         async function loadStudents() {
+            // NEW (Step 4): select('*, classes(grade, section)') joins the classes
+            // table through class_id, so we can show "Grade 5" instead of a UUID
+            // or the old inconsistent free-text value.
             const { data, error } = await supabaseClient
                 .from('students')
-                .select('*')
+                .select('*, classes(grade, section)')
                 .eq('school_id', BAAZ_SCHOOL_ID);
 
             if (error) {
@@ -755,13 +760,39 @@
             }
 
             document.getElementById('studentsList').innerHTML = students
-                .map(s => `
+                .map(s => {
+                    // Prefer the real linked class; fall back to the old free-text
+                    // field for any student that hasn't been migrated to class_id yet.
+                    const classLabel = s.classes
+                        ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}`
+                        : (s.class || 'N/A');
+                    return `
                     <tr>
                         <td style="font-weight: 500;">${s.full_name}</td>
                         <td style="color: var(--text-light); font-family: monospace;">${s.roll_number}</td>
-                        <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">${s.class || 'N/A'}</span></td>
+                        <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">${classLabel}</span></td>
                     </tr>
-                `).join('');
+                `;
+                }).join('');
+        }
+
+        // NEW (Step 4): fills the "Class" dropdown in the Add Student form with
+        // every real class row for this school, ordered by grade.
+        async function populateClassDropdown() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', BAAZ_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for dropdown:', error);
+                return;
+            }
+
+            document.getElementById('studentClass').innerHTML = (data || [])
+                .map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`)
+                .join('');
         }
 
         async function loadStaff() {
@@ -891,7 +922,9 @@
         async function handleAddStudent() {
             const name = document.getElementById('studentName').value;
             const roll = document.getElementById('studentRoll').value;
-            const cls = document.getElementById('studentClass').value;
+            // NEW (Step 4): this now reads a real classes.id from the dropdown,
+            // not free text - it gets saved into the new class_id column.
+            const classId = document.getElementById('studentClass').value;
 
             if (!name || !roll) {
                 alert('Please fill in all required fields');
@@ -902,7 +935,7 @@
                 school_id: BAAZ_SCHOOL_ID,
                 full_name: name,
                 roll_number: roll,
-                class: cls
+                class_id: classId || null
             });
 
             if (error) {

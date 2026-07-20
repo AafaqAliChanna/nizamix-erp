@@ -71,3 +71,4 @@ need to get their exact words down before building it, not a paraphrase.
 Add real staff (need Auth users created first, then staff rows) before the
 Timetable page has anything real to show. After that: either build an
 in-app "Add Staff" form, or keep doing it by hand in the Supabase dashboard.
+"Staff/timetable populated with real data.

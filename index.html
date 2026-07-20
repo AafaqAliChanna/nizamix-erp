@@ -326,6 +326,16 @@
         .page { display: none; }
         .page.active { display: block; }
 
+        /* NEW: report card printing. When #reportCardOverlay is open and the user
+           hits Print/Ctrl+P, hide everything else on the page so only the report
+           card itself ends up on paper (or as a saved PDF). */
+        @media print {
+            body * { visibility: hidden; }
+            #reportCardOverlay, #reportCardOverlay * { visibility: visible; }
+            #reportCardOverlay { position: absolute; top: 0; left: 0; }
+            .no-print { display: none !important; }
+        }
+
         .table-container {
             background: var(--card-bg);
             border-radius: 12px;
@@ -510,6 +520,13 @@
                     <button class="nav-link" onclick="showPage('timetable')">
                         <i class="fas fa-clock"></i>
                         <span>Timetable</span>
+                    </button>
+                </li>
+                <!-- NEW: Exams nav link - marks entry + report cards -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('exams')">
+                        <i class="fas fa-file-lines"></i>
+                        <span>Exams</span>
                     </button>
                 </li>
                 <!-- NEW (Step 3): Attendance nav link, same pattern as Students/Staff above -->
@@ -746,6 +763,112 @@
                     </div>
                 </div>
 
+                <!-- NEW: Exams Page. Pick a class, pick or create an exam, enter marks
+                     in a grid (rows = students, columns = subjects), then view/print a
+                     report card per student. -->
+                <div class="page" id="exams">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Exams</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Enter marks and generate report cards</p>
+                    </div>
+
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <div class="input-group">
+                            <select id="examClassFilter" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;" onchange="loadExamsForClass()"></select>
+                        </div>
+                    </div>
+
+                    <!-- List of exams for the selected class -->
+                    <div id="examListView" style="display: none;">
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <div class="input-group">
+                                <select id="newExamTerm" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                                    <option value="Term 1">Term 1</option>
+                                    <option value="Term 2">Term 2</option>
+                                    <option value="Final Term">Final Term</option>
+                                </select>
+                                <input id="newExamName" placeholder="Exam name, e.g. Mid Term">
+                                <button class="btn btn-primary" onclick="handleCreateExam()"><i class="fas fa-plus"></i> Create Exam</button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead><tr><th>Exam</th><th>Term</th><th>Academic Year</th><th></th></tr></thead>
+                                <tbody id="examsList"><tr><td colspan="4" class="empty-state">Select a class above</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Marks entry grid for one exam -->
+                    <div id="examMarksView" style="display: none;">
+                        <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                            <button class="btn" onclick="backToExamList()"><i class="fas fa-arrow-left"></i> Back to Exams</button>
+                            <h3 id="examMarksTitle" style="margin: 0;"></h3>
+                        </div>
+                        <div class="table-container" style="margin-bottom: 16px;">
+                            <div class="input-group">
+                                <input id="newSubjectName" placeholder="Subject name">
+                                <input id="newSubjectTotal" type="number" placeholder="Total marks, e.g. 100" value="100">
+                                <button class="btn btn-secondary" onclick="addExamSubjectColumn()"><i class="fas fa-plus"></i> Add Subject</button>
+                                <button class="btn btn-primary" onclick="saveExamMarks()"><i class="fas fa-check"></i> Save Marks</button>
+                            </div>
+                        </div>
+                        <div class="table-container" style="overflow-x: auto;">
+                            <table id="examMarksTable">
+                                <thead><tr id="examMarksHeaderRow"><th>Student</th></tr></thead>
+                                <tbody id="examMarksBody"></tbody>
+                            </table>
+                        </div>
+                        <p style="color: var(--text-light); padding: 12px 4px;">Leave a cell blank to skip that student/subject. Click "Save Marks" to write everything to Supabase at once.</p>
+                        <div class="table-container" style="margin-top: 16px;">
+                            <table>
+                                <thead><tr><th>Student</th><th>Report Card</th></tr></thead>
+                                <tbody id="reportCardLinks"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Printable report card overlay - hidden until openReportCard() is
+                     called, and everything except this is hidden via @media print. -->
+                <div id="reportCardOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
+                    <div style="max-width: 700px; margin: 0 auto;">
+                        <div class="no-print" style="margin-bottom: 24px; display: flex; gap: 10px;">
+                            <button class="btn" onclick="closeReportCard()"><i class="fas fa-times"></i> Close</button>
+                            <button class="btn btn-primary" onclick="window.print()"><i class="fas fa-print"></i> Print / Save as PDF</button>
+                        </div>
+                        <div style="text-align: center; margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 16px;">
+                            <h2 id="rcSchoolName" style="margin: 0;"></h2>
+                            <p id="rcExamName" style="margin: 4px 0;"></p>
+                            <p id="rcStudentInfo" style="margin: 4px 0; font-weight: 600;"></p>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 2px solid #333;">
+                                    <th style="text-align: left; padding: 8px;">Subject</th>
+                                    <th style="text-align: right; padding: 8px;">Marks Obtained</th>
+                                    <th style="text-align: right; padding: 8px;">Total Marks</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rcSubjectRows"></tbody>
+                            <tfoot>
+                                <tr style="border-top: 2px solid #333; font-weight: 700;">
+                                    <td style="padding: 8px;">Total</td>
+                                    <td id="rcTotalObtained" style="text-align: right; padding: 8px;"></td>
+                                    <td id="rcTotalMax" style="text-align: right; padding: 8px;"></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                        <p style="margin-top: 16px; font-size: 18px; font-weight: 700;">Percentage: <span id="rcPercentage"></span>% &nbsp;|&nbsp; Grade: <span id="rcGrade"></span> &nbsp;|&nbsp; Status: <span id="rcPassFail"></span></p>
+                        <p style="font-size: 14px; color: #555;">Attendance this year: <span id="rcAttendance"></span></p>
+                        <div style="margin-top: 20px;">
+                            <label style="font-weight: 600; display: block; margin-bottom: 6px;">Remarks</label>
+                            <textarea id="rcRemarks" rows="3" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit;" placeholder="Teacher's remarks for this student..."></textarea>
+                            <button class="btn btn-primary no-print" style="margin-top: 8px;" onclick="saveReportCardRemarks()"><i class="fas fa-check"></i> Save Remarks</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- NEW (Step 3, reworked): Attendance Page. Now class-first - pick a class,
                      its students appear with a status dropdown each, save all at once with
                      one button. History table below is unchanged. -->
@@ -822,6 +945,9 @@
         // Matches the DB default on students/attendance/timetable.academic_year.
         // Change this one line at the start of a new school year.
         const CURRENT_ACADEMIC_YEAR = '2026-2027';
+        // Generic Pakistani-school passing threshold - adjust if Baaz uses a
+        // different minimum (some use 33%, some 40%).
+        const PASSING_PERCENTAGE = 40;
 
         // NEW: figures out which school the logged-in user belongs to, by looking
         // up their own staff row (staff.id = the logged-in auth user's id, enforced
@@ -937,6 +1063,7 @@
             await loadClassesList();
             await populateAttendanceClassFilter();
             await populateTimetableClassFilter();
+            await populateExamClassFilter();
             await loadAttendance();
         }
 
@@ -1391,12 +1518,13 @@
                 day_of_week: day,
                 period_number: period,
                 academic_year: CURRENT_ACADEMIC_YEAR
-            }, { onConflict: 'class_id,day_of_week,period_number' });
+            }, { onConflict: 'class_id,day_of_week,period_number,academic_year' });
 
             if (error) {
-                // The (staff_id, day_of_week, period_number) unique constraint is what
-                // throws here if this teacher is already teaching another class right now.
-                if (error.message.includes('timetable_staff_id_day_of_week_period_number_key')) {
+                // The staff-slot unique constraint (renamed to include academic_year)
+                // is what throws here if this teacher is already teaching another
+                // class at this same period this year.
+                if (error.message.includes('timetable_staff_slot_per_year_key')) {
                     alert('This teacher is already assigned to another class at this same period. Pick a different teacher or period.');
                 } else {
                     alert('Error saving timetable slot: ' + error.message);
@@ -1404,6 +1532,342 @@
                 await loadTimetableGrid(classId);
                 return;
             }
+        }
+
+        // ---- Exams page ----
+
+        let currentExamId = null;
+        let currentExamClassId = null;
+        let currentExamTerm = '';
+        // {subject: string, total: number} - built fresh each time an exam opens.
+        let examSubjectColumns = [];
+
+        async function populateExamClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for exams filter:', error);
+                return;
+            }
+
+            document.getElementById('examClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadExamsForClass() {
+            const classId = document.getElementById('examClassFilter').value;
+            document.getElementById('examListView').style.display = 'none';
+            document.getElementById('examMarksView').style.display = 'none';
+            if (!classId) return;
+
+            document.getElementById('examListView').style.display = 'block';
+            document.getElementById('examListView').dataset.classId = classId;
+
+            const { data, error } = await supabaseClient
+                .from('exams')
+                .select('id, name, term, academic_year')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                document.getElementById('examsList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const exams = data || [];
+            if (exams.length === 0) {
+                document.getElementById('examsList').innerHTML = '<tr><td colspan="4" class="empty-state">No exams yet - create one above</td></tr>';
+                return;
+            }
+
+            document.getElementById('examsList').innerHTML = exams.map(ex => `
+                <tr>
+                    <td style="font-weight: 500;">${ex.name}</td>
+                    <td>${ex.term}</td>
+                    <td>${ex.academic_year}</td>
+                    <td><button class="btn btn-primary" onclick="openExamMarks('${ex.id}', '${ex.name.replace(/'/g, "\\'")}', '${ex.term.replace(/'/g, "\\'")}')">Enter Marks</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function handleCreateExam() {
+            const classId = document.getElementById('examListView').dataset.classId;
+            const term = document.getElementById('newExamTerm').value;
+            const name = document.getElementById('newExamName').value.trim();
+            if (!name) {
+                alert('Enter an exam name, e.g. "Mid Term".');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('exams').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                name: name,
+                term: term,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            });
+
+            if (error) {
+                alert('Error creating exam: ' + error.message);
+                return;
+            }
+
+            document.getElementById('newExamName').value = '';
+            await loadExamsForClass();
+        }
+
+        function backToExamList() {
+            document.getElementById('examMarksView').style.display = 'none';
+            document.getElementById('examListView').style.display = 'block';
+        }
+
+        // Opens the marks grid for one exam: builds subject columns from whatever
+        // exam_results already exist, then any timetable subjects for that class
+        // (grade 4+) that aren't in there yet as empty starter columns. Grades
+        // 1-3 have no timetable subjects, so they start blank - use "Add Subject".
+        async function openExamMarks(examId, examName, examTerm) {
+            currentExamId = examId;
+            currentExamClassId = document.getElementById('examListView').dataset.classId;
+            currentExamTerm = examTerm;
+            document.getElementById('examListView').style.display = 'none';
+            document.getElementById('examMarksView').style.display = 'block';
+            document.getElementById('examMarksTitle').textContent = examName + ' (' + examTerm + ')';
+
+            const [resultsRes, timetableRes, studentsRes] = await Promise.all([
+                supabaseClient.from('exam_results').select('student_id, subject, marks_obtained, total_marks').eq('exam_id', examId),
+                supabaseClient.from('timetable').select('subject').eq('school_id', CURRENT_SCHOOL_ID).eq('class_id', currentExamClassId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                getStudentsForClass(currentExamClassId)
+            ]);
+
+            const existingResults = resultsRes.data || [];
+            const timetableSubjects = [...new Set((timetableRes.data || []).map(t => t.subject))];
+
+            examSubjectColumns = [];
+            const seen = new Set();
+            existingResults.forEach(r => {
+                if (!seen.has(r.subject)) {
+                    seen.add(r.subject);
+                    examSubjectColumns.push({ subject: r.subject, total: Number(r.total_marks) });
+                }
+            });
+            timetableSubjects.forEach(s => {
+                if (!seen.has(s)) {
+                    seen.add(s);
+                    examSubjectColumns.push({ subject: s, total: 100 });
+                }
+            });
+
+            renderExamMarksGrid(studentsRes, existingResults);
+        }
+
+        function addExamSubjectColumn() {
+            const name = document.getElementById('newSubjectName').value.trim();
+            const total = Number(document.getElementById('newSubjectTotal').value) || 100;
+            if (!name) {
+                alert('Enter a subject name.');
+                return;
+            }
+            if (examSubjectColumns.some(c => c.subject === name)) {
+                alert('That subject is already a column.');
+                return;
+            }
+            examSubjectColumns.push({ subject: name, total: total });
+            document.getElementById('newSubjectName').value = '';
+            // Re-render with whatever students/results are currently on screen -
+            // read back from the DOM rather than re-fetching, keeps unsaved entries.
+            rebuildGridPreservingInput();
+        }
+
+        // Rebuilds the grid's header/columns while keeping any marks already typed
+        // in, so adding a subject mid-entry doesn't wipe out unsaved work.
+        function rebuildGridPreservingInput() {
+            const rows = document.querySelectorAll('#examMarksBody tr[data-student-id]');
+            const studentsSnapshot = Array.from(rows).map(row => {
+                const marks = {};
+                examSubjectColumns.slice(0, -1).forEach(col => {
+                    const input = row.querySelector(`input[data-subject="${col.subject}"]`);
+                    if (input && input.value !== '') marks[col.subject] = Number(input.value);
+                });
+                return { id: row.dataset.studentId, full_name: row.dataset.fullName, roll_number: row.dataset.rollNumber, marks };
+            });
+
+            renderExamMarksGrid(studentsSnapshot, [], studentsSnapshot);
+        }
+
+        // students: [{id, full_name, roll_number}]. existingResults (first load only):
+        // [{student_id, subject, marks_obtained}]. carriedMarks (rebuild only): each
+        // student object already carries a .marks map of subject->value.
+        function renderExamMarksGrid(students, existingResults, carriedStudents) {
+            const headerRow = document.getElementById('examMarksHeaderRow');
+            headerRow.innerHTML = '<th>Student</th>' + examSubjectColumns.map(col => `
+                <th>
+                    ${col.subject}<br>
+                    <small style="font-weight: 400;">/ <input type="number" value="${col.total}" style="width: 50px; padding: 2px 4px;" onchange="updateSubjectTotal('${col.subject}', this.value)"></small>
+                    <button type="button" class="no-print" style="border:none;background:none;color:#ef4444;cursor:pointer;" onclick="removeExamSubjectColumn('${col.subject}')" title="Remove column">&times;</button>
+                </th>
+            `).join('');
+
+            const resultsByStudent = {};
+            existingResults.forEach(r => {
+                resultsByStudent[r.student_id] = resultsByStudent[r.student_id] || {};
+                resultsByStudent[r.student_id][r.subject] = r.marks_obtained;
+            });
+
+            document.getElementById('examMarksBody').innerHTML = students.map(s => {
+                const marks = carriedStudents ? (s.marks || {}) : (resultsByStudent[s.id] || {});
+                const cells = examSubjectColumns.map(col => {
+                    const val = marks[col.subject];
+                    return `<td><input type="number" min="0" max="${col.total}" data-subject="${col.subject}" value="${val !== undefined ? val : ''}" style="width: 60px; padding: 6px;"></td>`;
+                }).join('');
+                return `<tr data-student-id="${s.id}" data-full-name="${s.full_name}" data-roll-number="${s.roll_number || ''}">
+                    <td style="font-weight: 500;">${s.full_name} <small style="color: var(--text-light);">(${s.roll_number || 'N/A'})</small></td>
+                    ${cells}
+                </tr>`;
+            }).join('');
+
+            renderReportCardLinks(students);
+        }
+
+        function updateSubjectTotal(subject, value) {
+            const col = examSubjectColumns.find(c => c.subject === subject);
+            if (col) col.total = Number(value) || 100;
+        }
+
+        function removeExamSubjectColumn(subject) {
+            examSubjectColumns = examSubjectColumns.filter(c => c.subject !== subject);
+            rebuildGridPreservingInput();
+        }
+
+        function renderReportCardLinks(students) {
+            document.getElementById('reportCardLinks').innerHTML = students.map(s => `
+                <tr>
+                    <td>${s.full_name}</td>
+                    <td><button class="btn" onclick="openReportCard('${s.id}', '${s.full_name.replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i> View / Print</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function saveExamMarks() {
+            const rows = document.querySelectorAll('#examMarksBody tr[data-student-id]');
+            const records = [];
+            rows.forEach(row => {
+                examSubjectColumns.forEach(col => {
+                    const input = row.querySelector(`input[data-subject="${col.subject}"]`);
+                    if (input && input.value !== '') {
+                        records.push({
+                            school_id: CURRENT_SCHOOL_ID,
+                            exam_id: currentExamId,
+                            student_id: row.dataset.studentId,
+                            subject: col.subject,
+                            marks_obtained: Number(input.value),
+                            total_marks: col.total
+                        });
+                    }
+                });
+            });
+
+            if (records.length === 0) {
+                alert('No marks entered yet.');
+                return;
+            }
+
+            const { error } = await supabaseClient
+                .from('exam_results')
+                .upsert(records, { onConflict: 'exam_id,student_id,subject' });
+
+            if (error) {
+                alert('Error saving marks: ' + error.message);
+                return;
+            }
+            alert('Saved ' + records.length + ' mark(s).');
+        }
+
+        // ---- Report card ----
+
+        function gradeFor(percentage) {
+            if (percentage >= 80) return 'A';
+            if (percentage >= 70) return 'B';
+            if (percentage >= 60) return 'C';
+            if (percentage >= 50) return 'D';
+            return 'F';
+        }
+
+        let currentReportCardStudentId = null;
+
+        async function openReportCard(studentId, studentName) {
+            currentReportCardStudentId = studentId;
+
+            const [resultsRes, attendanceRes, remarksRes] = await Promise.all([
+                supabaseClient.from('exam_results').select('subject, marks_obtained, total_marks').eq('exam_id', currentExamId).eq('student_id', studentId),
+                supabaseClient.from('attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('student_id', studentId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('exam_remarks').select('remarks').eq('exam_id', currentExamId).eq('student_id', studentId).maybeSingle()
+            ]);
+
+            const results = resultsRes.data || [];
+            if (results.length === 0) {
+                alert('No saved marks for this student yet - click "Save Marks" first.');
+                return;
+            }
+
+            const totalObtained = results.reduce((sum, r) => sum + Number(r.marks_obtained), 0);
+            const totalMax = results.reduce((sum, r) => sum + Number(r.total_marks), 0);
+            const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(1) : '0.0';
+
+            // Attendance % for the year, independent of the exam itself.
+            const attendanceRecords = attendanceRes.data || [];
+            const presentCount = attendanceRecords.filter(a => a.status === 'present').length;
+            const attendancePct = attendanceRecords.length > 0
+                ? ((presentCount / attendanceRecords.length) * 100).toFixed(1) + '% (' + presentCount + '/' + attendanceRecords.length + ' days)'
+                : 'No attendance recorded yet';
+
+            document.getElementById('rcSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('rcExamName').textContent = document.getElementById('examMarksTitle').textContent + ' — ' + CURRENT_ACADEMIC_YEAR;
+            document.getElementById('rcStudentInfo').textContent = studentName;
+            document.getElementById('rcSubjectRows').innerHTML = results.map(r => `
+                <tr style="border-bottom: 1px solid #ddd;">
+                    <td style="padding: 8px;">${r.subject}</td>
+                    <td style="text-align: right; padding: 8px;">${r.marks_obtained}</td>
+                    <td style="text-align: right; padding: 8px;">${r.total_marks}</td>
+                </tr>
+            `).join('');
+            document.getElementById('rcTotalObtained').textContent = totalObtained;
+            document.getElementById('rcTotalMax').textContent = totalMax;
+            document.getElementById('rcPercentage').textContent = percentage;
+            document.getElementById('rcGrade').textContent = gradeFor(Number(percentage));
+            const passed = Number(percentage) >= PASSING_PERCENTAGE;
+            const passFailEl = document.getElementById('rcPassFail');
+            passFailEl.textContent = passed ? 'PASS' : 'FAIL';
+            passFailEl.style.color = passed ? '#166534' : '#991b1b';
+            document.getElementById('rcAttendance').textContent = attendancePct;
+            document.getElementById('rcRemarks').value = remarksRes.data?.remarks || '';
+
+            document.getElementById('reportCardOverlay').style.display = 'block';
+        }
+
+        async function saveReportCardRemarks() {
+            const remarks = document.getElementById('rcRemarks').value.trim();
+            const { error } = await supabaseClient.from('exam_remarks').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                exam_id: currentExamId,
+                student_id: currentReportCardStudentId,
+                remarks: remarks
+            }, { onConflict: 'exam_id,student_id' });
+
+            if (error) {
+                alert('Error saving remarks: ' + error.message);
+                return;
+            }
+            alert('Remarks saved.');
+        }
+
+        function closeReportCard() {
+            document.getElementById('reportCardOverlay').style.display = 'none';
         }
 
         // NEW (Step 3): loads attendance history and shows it in the table.
@@ -1495,6 +1959,7 @@
                 'staff': 'Staff Directory',
                 'classes': 'Classes',
                 'timetable': 'Timetable',
+                'exams': 'Exams',
                 'attendance': 'Attendance'
             };
             document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';

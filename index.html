@@ -331,8 +331,8 @@
            card itself ends up on paper (or as a saved PDF). */
         @media print {
             body * { visibility: hidden; }
-            #reportCardOverlay, #reportCardOverlay * { visibility: visible; }
-            #reportCardOverlay { position: absolute; top: 0; left: 0; }
+            #reportCardOverlay, #reportCardOverlay *, #feeReceiptOverlay, #feeReceiptOverlay * { visibility: visible; }
+            #reportCardOverlay, #feeReceiptOverlay { position: absolute; top: 0; left: 0; }
             .no-print { display: none !important; }
         }
 
@@ -527,6 +527,13 @@
                     <button class="nav-link" onclick="showPage('exams')">
                         <i class="fas fa-file-lines"></i>
                         <span>Exams</span>
+                    </button>
+                </li>
+                <!-- NEW: Fees nav link - Principal only, RLS enforced -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('fees')">
+                        <i class="fas fa-money-bill"></i>
+                        <span>Fees</span>
                     </button>
                 </li>
                 <!-- NEW (Step 3): Attendance nav link, same pattern as Students/Staff above -->
@@ -869,6 +876,81 @@
                     </div>
                 </div>
 
+                <!-- NEW: Fees Page. Principal only (RLS enforced - a Teacher account
+                     will just see empty tables here, not an error). Set a monthly fee
+                     per class, generate that month's invoices for the whole class,
+                     record payments, print receipts. -->
+                <div class="page" id="fees">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Fees</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Set monthly fees, generate invoices, record payments</p>
+                    </div>
+
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <div class="input-group">
+                            <select id="feesClassFilter" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;" onchange="loadFeesForClass()"></select>
+                        </div>
+                    </div>
+
+                    <div id="feesClassView" style="display: none;">
+                        <!-- Monthly fee amount for this class -->
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <div class="input-group">
+                                <h3 style="margin: 0; align-self: center;">Monthly Fee</h3>
+                                <input id="feeMonthlyAmount" type="number" min="0" placeholder="Amount, e.g. 3000">
+                                <button class="btn btn-primary" onclick="saveFeeStructure()"><i class="fas fa-check"></i> Save</button>
+                            </div>
+                        </div>
+
+                        <!-- Generate + view invoices for a specific month -->
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <div class="input-group">
+                                <input id="feeMonthPicker" type="month">
+                                <button class="btn btn-secondary" onclick="generateFeeInvoices()"><i class="fas fa-file-invoice"></i> Generate Invoices</button>
+                                <button class="btn btn-primary" onclick="loadFeeInvoices()"><i class="fas fa-eye"></i> View Invoices</button>
+                            </div>
+                        </div>
+
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Due</th>
+                                        <th>Paid</th>
+                                        <th>Balance</th>
+                                        <th>Status</th>
+                                        <th>Record Payment</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="feeInvoicesList"><tr><td colspan="7" class="empty-state">Pick a month and click "View Invoices"</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Printable fee receipt -->
+                <div id="feeReceiptOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
+                    <div style="max-width: 500px; margin: 0 auto;">
+                        <div class="no-print" style="margin-bottom: 24px; display: flex; gap: 10px;">
+                            <button class="btn" onclick="closeFeeReceipt()"><i class="fas fa-times"></i> Close</button>
+                            <button class="btn btn-primary" onclick="window.print()"><i class="fas fa-print"></i> Print / Save as PDF</button>
+                        </div>
+                        <div style="text-align: center; margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 16px;">
+                            <h2 id="frSchoolName" style="margin: 0;"></h2>
+                            <p>Fee Receipt</p>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr><td style="padding: 6px 0;">Student</td><td style="text-align: right;" id="frStudent"></td></tr>
+                            <tr><td style="padding: 6px 0;">Month</td><td style="text-align: right;" id="frMonth"></td></tr>
+                            <tr><td style="padding: 6px 0;">Amount Due</td><td style="text-align: right;" id="frDue"></td></tr>
+                            <tr><td style="padding: 6px 0;">Amount Paid</td><td style="text-align: right;" id="frPaid"></td></tr>
+                            <tr style="font-weight: 700; border-top: 2px solid #333;"><td style="padding: 6px 0;">Balance</td><td style="text-align: right;" id="frBalance"></td></tr>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- NEW (Step 3, reworked): Attendance Page. Now class-first - pick a class,
                      its students appear with a status dropdown each, save all at once with
                      one button. History table below is unchanged. -->
@@ -1064,6 +1146,7 @@
             await populateAttendanceClassFilter();
             await populateTimetableClassFilter();
             await populateExamClassFilter();
+            await populateFeesClassFilter();
             await loadAttendance();
         }
 
@@ -1928,6 +2011,228 @@
             document.getElementById('reportCardOverlay').style.display = 'none';
         }
 
+        // ---- Fees page (Principal-only via RLS - a Teacher will just see empty
+        // results here, not an error, since these queries return zero rows for them) ----
+
+        async function populateFeesClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for fees filter:', error);
+                return;
+            }
+
+            document.getElementById('feesClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            // Default the month picker to the current month, e.g. "2026-07"
+            const now = new Date();
+            document.getElementById('feeMonthPicker').value = now.toISOString().slice(0, 7);
+        }
+
+        async function loadFeesForClass() {
+            const classId = document.getElementById('feesClassFilter').value;
+            document.getElementById('feesClassView').style.display = classId ? 'block' : 'none';
+            document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="7" class="empty-state">Pick a month and click "View Invoices"</td></tr>';
+            if (!classId) return;
+
+            document.getElementById('feesClassView').dataset.classId = classId;
+
+            const { data } = await supabaseClient
+                .from('fee_structure')
+                .select('monthly_amount')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .maybeSingle();
+
+            document.getElementById('feeMonthlyAmount').value = data?.monthly_amount ?? '';
+        }
+
+        async function saveFeeStructure() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const amount = Number(document.getElementById('feeMonthlyAmount').value);
+            if (!amount || amount <= 0) {
+                alert('Enter a valid monthly fee amount.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('fee_structure').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                monthly_amount: amount,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }, { onConflict: 'class_id,academic_year' });
+
+            if (error) {
+                alert('Error saving fee amount: ' + error.message);
+                return;
+            }
+            alert('Monthly fee saved.');
+        }
+
+        // "2026-07" -> "July 2026"
+        function monthLabel(monthValue) {
+            const [year, month] = monthValue.split('-');
+            const date = new Date(Number(year), Number(month) - 1, 1);
+            return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+        }
+
+        async function generateFeeInvoices() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const monthValue = document.getElementById('feeMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data: structure } = await supabaseClient
+                .from('fee_structure')
+                .select('monthly_amount')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .maybeSingle();
+
+            if (!structure) {
+                alert('Set this class\'s monthly fee amount first, then generate invoices.');
+                return;
+            }
+
+            const students = await getStudentsForClass(classId);
+            if (students.length === 0) {
+                alert('No students in this class.');
+                return;
+            }
+
+            const records = students.map(s => ({
+                school_id: CURRENT_SCHOOL_ID,
+                student_id: s.id,
+                class_id: classId,
+                month: month,
+                amount_due: structure.monthly_amount,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }));
+
+            // ignoreDuplicates so re-clicking "Generate" for a month that already has
+            // invoices doesn't wipe out payments already recorded on existing ones.
+            const { error } = await supabaseClient
+                .from('fee_invoices')
+                .upsert(records, { onConflict: 'student_id,month,academic_year', ignoreDuplicates: true });
+
+            if (error) {
+                alert('Error generating invoices: ' + error.message);
+                return;
+            }
+
+            alert(`Invoices ready for ${month} - ${students.length} student(s).`);
+            await loadFeeInvoices();
+        }
+
+        async function loadFeeInvoices() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const monthValue = document.getElementById('feeMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data, error } = await supabaseClient
+                .from('fee_invoices')
+                .select('id, amount_due, amount_paid, students(id, full_name, roll_number)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('month', month)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            if (error) {
+                document.getElementById('feeInvoicesList').innerHTML = `<tr><td colspan="7" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const invoices = data || [];
+            if (invoices.length === 0) {
+                document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="7" class="empty-state">No invoices for this month yet - click "Generate Invoices"</td></tr>';
+                return;
+            }
+
+            document.getElementById('feeInvoicesList').innerHTML = invoices.map(inv => {
+                const balance = inv.amount_due - inv.amount_paid;
+                const status = balance <= 0 ? 'Paid' : (inv.amount_paid > 0 ? 'Partial' : 'Unpaid');
+                const statusColor = status === 'Paid' ? '#166534' : (status === 'Partial' ? '#92400e' : '#991b1b');
+                return `
+                    <tr data-invoice-id="${inv.id}" data-due="${inv.amount_due}" data-paid="${inv.amount_paid}">
+                        <td style="font-weight: 500;">${inv.students.full_name}</td>
+                        <td>${inv.amount_due}</td>
+                        <td>${inv.amount_paid}</td>
+                        <td>${balance}</td>
+                        <td style="color: ${statusColor}; font-weight: 600;">${status}</td>
+                        <td><input type="number" min="0" max="${balance}" placeholder="Amount" style="width: 90px; padding: 6px;" id="payInput-${inv.id}"></td>
+                        <td>
+                            <button class="btn btn-primary" onclick="recordFeePayment('${inv.id}')">Record</button>
+                            <button class="btn" onclick="openFeeReceipt('${inv.id}', '${inv.students.full_name.replace(/'/g, "\\'")}', '${month}')">Receipt</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function recordFeePayment(invoiceId) {
+            const input = document.getElementById(`payInput-${invoiceId}`);
+            const amount = Number(input.value);
+            if (!amount || amount <= 0) {
+                alert('Enter a payment amount.');
+                return;
+            }
+
+            const row = document.querySelector(`tr[data-invoice-id="${invoiceId}"]`);
+            const currentPaid = Number(row.dataset.paid);
+            const due = Number(row.dataset.due);
+            const newPaid = currentPaid + amount;
+
+            if (newPaid > due) {
+                if (!confirm(`This payment would put the total paid (${newPaid}) above the amount due (${due}). Record anyway?`)) return;
+            }
+
+            const { error } = await supabaseClient
+                .from('fee_invoices')
+                .update({ amount_paid: newPaid })
+                .eq('id', invoiceId);
+
+            if (error) {
+                alert('Error recording payment: ' + error.message);
+                return;
+            }
+
+            await loadFeeInvoices();
+        }
+
+        function openFeeReceipt(invoiceId, studentName, month) {
+            const row = document.querySelector(`tr[data-invoice-id="${invoiceId}"]`);
+            const due = Number(row.dataset.due);
+            const paid = Number(row.dataset.paid);
+
+            document.getElementById('frSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('frStudent').textContent = studentName;
+            document.getElementById('frMonth').textContent = month;
+            document.getElementById('frDue').textContent = due;
+            document.getElementById('frPaid').textContent = paid;
+            document.getElementById('frBalance').textContent = due - paid;
+
+            document.getElementById('feeReceiptOverlay').style.display = 'block';
+        }
+
+        function closeFeeReceipt() {
+            document.getElementById('feeReceiptOverlay').style.display = 'none';
+        }
+
         // NEW (Step 3): loads attendance history and shows it in the table.
         // select('date, status, students(full_name)') is a JOIN - it pulls the
         // student's name from the students table using the student_id foreign key,
@@ -2018,6 +2323,7 @@
                 'classes': 'Classes',
                 'timetable': 'Timetable',
                 'exams': 'Exams',
+                'fees': 'Fees',
                 'attendance': 'Attendance'
             };
             document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';

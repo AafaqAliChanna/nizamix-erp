@@ -1271,7 +1271,10 @@
                     <tr>
                         <td style="font-weight: 500;">${label}</td>
                         <td>${count}</td>
-                        <td><button class="btn btn-primary" onclick="viewClass('${c.id}', '${label}')">View Students</button></td>
+                        <td>
+                            <button class="btn btn-primary" onclick="viewClass('${c.id}', '${label}')">View Students</button>
+                            <button class="btn" onclick="promoteClass('${c.id}', ${c.grade}, '${(c.section || '').replace(/'/g, "\\'")}')">Promote</button>
+                        </td>
                     </tr>
                 `;
             }).join('');
@@ -1293,6 +1296,61 @@
         function backToClassList() {
             document.getElementById('classDetailView').style.display = 'none';
             document.getElementById('classListView').style.display = 'block';
+        }
+
+        // "2026-2027" -> "2027-2028"
+        function nextAcademicYear(current) {
+            const parts = current.split('-').map(Number);
+            if (parts.length !== 2 || parts.some(isNaN)) return current;
+            return (parts[0] + 1) + '-' + (parts[1] + 1);
+        }
+
+        // Moves every student in one class to the next grade's class, and bumps
+        // their academic_year forward. Requires the target grade's class to
+        // already exist (same section) - won't auto-create one, since that could
+        // silently create a class with no teacher assigned.
+        async function promoteClass(classId, grade, section) {
+            if (grade >= 10) {
+                alert('Grade 10 is the highest grade in this school - these students are graduating, not being promoted to a new class.');
+                return;
+            }
+            const targetYear = nextAcademicYear(CURRENT_ACADEMIC_YEAR);
+            const targetGrade = grade + 1;
+
+            const { data: targetClass, error: findError } = await supabaseClient
+                .from('classes')
+                .select('id')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('grade', targetGrade)
+                .eq('section', section || null)
+                .maybeSingle();
+
+            if (findError || !targetClass) {
+                alert(`No Grade ${targetGrade}${section ? '-' + section : ''} class exists yet. Create it first, then promote.`);
+                return;
+            }
+
+            const confirmed = confirm(
+                `Promote all students from Grade ${grade}${section ? '-' + section : ''} (${CURRENT_ACADEMIC_YEAR}) ` +
+                `to Grade ${targetGrade}${section ? '-' + section : ''} (${targetYear})?\n\nThis updates their class and academic year for every student currently in this class. This cannot be undone from here.`
+            );
+            if (!confirmed) return;
+
+            const { data: updated, error } = await supabaseClient
+                .from('students')
+                .update({ class_id: targetClass.id, academic_year: targetYear })
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .select('id');
+
+            if (error) {
+                alert('Error promoting students: ' + error.message);
+                return;
+            }
+
+            alert(`Promoted ${updated.length} student(s) to Grade ${targetGrade}${section ? '-' + section : ''} (${targetYear}).`);
+            await loadClassesList();
         }
 
         async function saveClassAttendance() {

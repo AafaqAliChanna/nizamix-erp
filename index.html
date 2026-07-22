@@ -331,8 +331,8 @@
            card itself ends up on paper (or as a saved PDF). */
         @media print {
             body * { visibility: hidden; }
-            #reportCardOverlay, #reportCardOverlay *, #feeReceiptOverlay, #feeReceiptOverlay * { visibility: visible; }
-            #reportCardOverlay, #feeReceiptOverlay { position: absolute; top: 0; left: 0; }
+            #reportCardOverlay, #reportCardOverlay *, #feeReceiptOverlay, #feeReceiptOverlay *, #idCardOverlay, #idCardOverlay * { visibility: visible; }
+            #reportCardOverlay, #feeReceiptOverlay, #idCardOverlay { position: absolute; top: 0; left: 0; }
             .no-print { display: none !important; }
         }
 
@@ -618,6 +618,9 @@
                                 <!-- NEW (Step 4): real dropdown fed from the classes table,
                                      instead of a free-text field. Filled by populateClassDropdown(). -->
                                 <select id="studentClass" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
+                                <input id="studentGuardianName" placeholder="Guardian name">
+                                <input id="studentDob" type="date" title="Date of birth">
+                                <input id="studentPhoto" type="file" accept="image/*" title="Photo (optional)">
                                 <button class="btn btn-primary" onclick="handleAddStudent()">Save</button>
                                 <button class="btn btn-secondary" onclick="hideAddStudentForm()">Cancel</button>
                             </div>
@@ -631,11 +634,12 @@
                                     <th>Full Name</th>
                                     <th>Roll Number</th>
                                     <th>Class</th>
+                                    <th>Photo / ID Card</th>
                                 </tr>
                             </thead>
                             <tbody id="studentsList">
                                 <tr>
-                                    <td colspan="3" class="empty-state">Loading students...</td>
+                                    <td colspan="4" class="empty-state">Loading students...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -883,7 +887,21 @@
                 <div class="page" id="fees">
                     <div style="margin-bottom: 30px;">
                         <h2 style="margin: 0;">Fees</h2>
-                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Set monthly fees, generate invoices, record payments</p>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Set monthly fees, generate invoices, mark paid/unpaid</p>
+                    </div>
+
+                    <!-- Defaulters: school-wide, all classes, for a picked month -->
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <div class="input-group">
+                            <input id="defaultersMonthPicker" type="month">
+                            <button class="btn btn-secondary" onclick="loadDefaulters()"><i class="fas fa-exclamation-triangle"></i> Show Defaulters (All Classes)</button>
+                        </div>
+                    </div>
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <table>
+                            <thead><tr><th>Student</th><th>Class</th><th>Amount Due</th></tr></thead>
+                            <tbody id="defaultersList"><tr><td colspan="3" class="empty-state">Pick a month and click "Show Defaulters"</td></tr></tbody>
+                        </table>
                     </div>
 
                     <div class="table-container" style="margin-bottom: 24px;">
@@ -916,15 +934,12 @@
                                 <thead>
                                     <tr>
                                         <th>Student</th>
-                                        <th>Due</th>
-                                        <th>Paid</th>
-                                        <th>Balance</th>
+                                        <th>Amount Due</th>
                                         <th>Status</th>
-                                        <th>Record Payment</th>
                                         <th></th>
                                     </tr>
                                 </thead>
-                                <tbody id="feeInvoicesList"><tr><td colspan="7" class="empty-state">Pick a month and click "View Invoices"</td></tr></tbody>
+                                <tbody id="feeInvoicesList"><tr><td colspan="4" class="empty-state">Pick a month and click "View Invoices"</td></tr></tbody>
                             </table>
                         </div>
                     </div>
@@ -945,9 +960,27 @@
                             <tr><td style="padding: 6px 0;">Student</td><td style="text-align: right;" id="frStudent"></td></tr>
                             <tr><td style="padding: 6px 0;">Month</td><td style="text-align: right;" id="frMonth"></td></tr>
                             <tr><td style="padding: 6px 0;">Amount Due</td><td style="text-align: right;" id="frDue"></td></tr>
-                            <tr><td style="padding: 6px 0;">Amount Paid</td><td style="text-align: right;" id="frPaid"></td></tr>
-                            <tr style="font-weight: 700; border-top: 2px solid #333;"><td style="padding: 6px 0;">Balance</td><td style="text-align: right;" id="frBalance"></td></tr>
+                            <tr style="font-weight: 700; border-top: 2px solid #333;"><td style="padding: 6px 0;">Status</td><td style="text-align: right;" id="frStatus"></td></tr>
                         </table>
+                    </div>
+                </div>
+
+                <!-- Printable student ID card -->
+                <div id="idCardOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
+                    <div style="max-width: 400px; margin: 0 auto;">
+                        <div class="no-print" style="margin-bottom: 24px; display: flex; gap: 10px;">
+                            <button class="btn" onclick="closeIdCard()"><i class="fas fa-times"></i> Close</button>
+                            <button class="btn btn-primary" onclick="window.print()"><i class="fas fa-print"></i> Print / Save as PDF</button>
+                        </div>
+                        <div style="border: 2px solid #333; border-radius: 12px; padding: 20px; text-align: center;">
+                            <h3 id="idcSchoolName" style="margin: 0 0 12px 0;"></h3>
+                            <img id="idcPhoto" src="" alt="" style="width: 120px; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid #ccc; margin-bottom: 12px; display: none;" onerror="this.style.display='none'">
+                            <p style="font-weight: 700; font-size: 18px; margin: 4px 0;" id="idcName"></p>
+                            <p style="margin: 4px 0;" id="idcClass"></p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #555;">Roll No: <span id="idcRoll"></span></p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #555;">Guardian: <span id="idcGuardian"></span></p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #555;">Date of Birth: <span id="idcDob"></span></p>
+                        </div>
                     </div>
                 </div>
 
@@ -1161,7 +1194,7 @@
                 .eq('academic_year', CURRENT_ACADEMIC_YEAR);
 
             if (error) {
-                document.getElementById('studentsList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                document.getElementById('studentsList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
                 return;
             }
 
@@ -1169,7 +1202,7 @@
             document.getElementById('totalStudents').textContent = students.length;
 
             if (students.length === 0) {
-                document.getElementById('studentsList').innerHTML = '<tr><td colspan="3" class="empty-state">No students added yet</td></tr>';
+                document.getElementById('studentsList').innerHTML = '<tr><td colspan="4" class="empty-state">No students added yet</td></tr>';
                 return;
             }
 
@@ -1185,6 +1218,10 @@
                         <td style="font-weight: 500;">${s.full_name}</td>
                         <td style="color: var(--text-light); font-family: monospace;">${s.roll_number}</td>
                         <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">${classLabel}</span></td>
+                        <td>
+                            <input type="file" accept="image/*" style="width: 110px; font-size: 11px;" onchange="uploadPhotoForExistingStudent(this, '${s.id}')">
+                            <button class="btn" style="margin-top: 4px;" onclick="openIdCard('${s.id}')">ID Card</button>
+                        </td>
                     </tr>
                 `;
                 }).join('');
@@ -2121,7 +2158,7 @@
             }));
 
             // ignoreDuplicates so re-clicking "Generate" for a month that already has
-            // invoices doesn't wipe out payments already recorded on existing ones.
+            // invoices doesn't reset anyone already marked paid.
             const { error } = await supabaseClient
                 .from('fee_invoices')
                 .upsert(records, { onConflict: 'student_id,month,academic_year', ignoreDuplicates: true });
@@ -2146,85 +2183,98 @@
 
             const { data, error } = await supabaseClient
                 .from('fee_invoices')
-                .select('id, amount_due, amount_paid, students(id, full_name, roll_number)')
+                .select('id, amount_due, paid, students(id, full_name, roll_number)')
                 .eq('school_id', CURRENT_SCHOOL_ID)
                 .eq('class_id', classId)
                 .eq('month', month)
                 .eq('academic_year', CURRENT_ACADEMIC_YEAR);
 
             if (error) {
-                document.getElementById('feeInvoicesList').innerHTML = `<tr><td colspan="7" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                document.getElementById('feeInvoicesList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
                 return;
             }
 
             const invoices = data || [];
             if (invoices.length === 0) {
-                document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="7" class="empty-state">No invoices for this month yet - click "Generate Invoices"</td></tr>';
+                document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="4" class="empty-state">No invoices for this month yet - click "Generate Invoices"</td></tr>';
                 return;
             }
 
-            document.getElementById('feeInvoicesList').innerHTML = invoices.map(inv => {
-                const balance = inv.amount_due - inv.amount_paid;
-                const status = balance <= 0 ? 'Paid' : (inv.amount_paid > 0 ? 'Partial' : 'Unpaid');
-                const statusColor = status === 'Paid' ? '#166534' : (status === 'Partial' ? '#92400e' : '#991b1b');
-                return `
-                    <tr data-invoice-id="${inv.id}" data-due="${inv.amount_due}" data-paid="${inv.amount_paid}">
-                        <td style="font-weight: 500;">${inv.students.full_name}</td>
-                        <td>${inv.amount_due}</td>
-                        <td>${inv.amount_paid}</td>
-                        <td>${balance}</td>
-                        <td style="color: ${statusColor}; font-weight: 600;">${status}</td>
-                        <td><input type="number" min="0" max="${balance}" placeholder="Amount" style="width: 90px; padding: 6px;" id="payInput-${inv.id}"></td>
-                        <td>
-                            <button class="btn btn-primary" onclick="recordFeePayment('${inv.id}')">Record</button>
-                            <button class="btn" onclick="openFeeReceipt('${inv.id}', '${inv.students.full_name.replace(/'/g, "\\'")}', '${month}')">Receipt</button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
+            document.getElementById('feeInvoicesList').innerHTML = invoices.map(inv => `
+                <tr data-invoice-id="${inv.id}" data-due="${inv.amount_due}" data-paid="${inv.paid}">
+                    <td style="font-weight: 500;">${inv.students.full_name}</td>
+                    <td>${inv.amount_due}</td>
+                    <td style="color: ${inv.paid ? '#166534' : '#991b1b'}; font-weight: 600;">${inv.paid ? 'Paid' : 'Unpaid'}</td>
+                    <td>
+                        ${inv.paid
+                            ? `<button class="btn" onclick="setInvoicePaidStatus('${inv.id}', false)">Mark Unpaid</button>`
+                            : `<button class="btn btn-primary" onclick="setInvoicePaidStatus('${inv.id}', true)">Mark Paid</button>`}
+                        <button class="btn" onclick="openFeeReceipt('${inv.id}', '${inv.students.full_name.replace(/'/g, "\\'")}', '${month}')">Receipt</button>
+                    </td>
+                </tr>
+            `).join('');
         }
 
-        async function recordFeePayment(invoiceId) {
-            const input = document.getElementById(`payInput-${invoiceId}`);
-            const amount = Number(input.value);
-            if (!amount || amount <= 0) {
-                alert('Enter a payment amount.');
-                return;
-            }
-
-            const row = document.querySelector(`tr[data-invoice-id="${invoiceId}"]`);
-            const currentPaid = Number(row.dataset.paid);
-            const due = Number(row.dataset.due);
-            const newPaid = currentPaid + amount;
-
-            if (newPaid > due) {
-                if (!confirm(`This payment would put the total paid (${newPaid}) above the amount due (${due}). Record anyway?`)) return;
-            }
-
+        // Toggles paid/unpaid - this IS the correction mechanism, no separate
+        // "undo" needed: mark unpaid again if a payment was recorded by mistake.
+        async function setInvoicePaidStatus(invoiceId, paid) {
             const { error } = await supabaseClient
                 .from('fee_invoices')
-                .update({ amount_paid: newPaid })
+                .update({ paid: paid, paid_date: paid ? new Date().toISOString() : null })
                 .eq('id', invoiceId);
 
             if (error) {
-                alert('Error recording payment: ' + error.message);
+                alert('Error updating status: ' + error.message);
+                return;
+            }
+            await loadFeeInvoices();
+        }
+
+        // School-wide (all classes) list of unpaid invoices for a picked month,
+        // so the Principal doesn't have to check class by class.
+        async function loadDefaulters() {
+            const monthValue = document.getElementById('defaultersMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data, error } = await supabaseClient
+                .from('fee_invoices')
+                .select('amount_due, students(full_name), classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('month', month)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .eq('paid', false);
+
+            if (error) {
+                document.getElementById('defaultersList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
                 return;
             }
 
-            await loadFeeInvoices();
+            const defaulters = data || [];
+            if (defaulters.length === 0) {
+                document.getElementById('defaultersList').innerHTML = '<tr><td colspan="3" class="empty-state">No defaulters for this month - or invoices haven\'t been generated yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('defaultersList').innerHTML = defaulters.map(d => {
+                const classLabel = d.classes ? `Grade ${d.classes.grade}${d.classes.section ? '-' + d.classes.section : ''}` : 'N/A';
+                return `<tr><td>${d.students.full_name}</td><td>${classLabel}</td><td>${d.amount_due}</td></tr>`;
+            }).join('');
         }
 
         function openFeeReceipt(invoiceId, studentName, month) {
             const row = document.querySelector(`tr[data-invoice-id="${invoiceId}"]`);
-            const due = Number(row.dataset.due);
-            const paid = Number(row.dataset.paid);
+            const due = row.dataset.due;
+            const paid = row.dataset.paid === 'true';
 
             document.getElementById('frSchoolName').textContent = CURRENT_SCHOOL_NAME;
             document.getElementById('frStudent').textContent = studentName;
             document.getElementById('frMonth').textContent = month;
             document.getElementById('frDue').textContent = due;
-            document.getElementById('frPaid').textContent = paid;
-            document.getElementById('frBalance').textContent = due - paid;
+            document.getElementById('frStatus').textContent = paid ? 'PAID' : 'UNPAID';
 
             document.getElementById('feeReceiptOverlay').style.display = 'block';
         }
@@ -2276,31 +2326,119 @@
             document.getElementById('studentName').value = '';
             document.getElementById('studentRoll').value = '';
             document.getElementById('studentClass').value = '';
+            document.getElementById('studentGuardianName').value = '';
+            document.getElementById('studentDob').value = '';
+            document.getElementById('studentPhoto').value = '';
+        }
+
+        // Uploads a student photo to the private student-photos bucket, path
+        // <school_id>/<student_id>.<ext>, then saves the storage PATH (not a
+        // public URL) on the student's photo_path column - a signed URL is
+        // generated fresh whenever the photo actually needs to be shown.
+        async function uploadStudentPhoto(studentId, file) {
+            const ext = file.name.split('.').pop();
+            const path = `${CURRENT_SCHOOL_ID}/${studentId}.${ext}`;
+
+            const { error: uploadError } = await supabaseClient.storage
+                .from('student-photos')
+                .upload(path, file, { upsert: true });
+
+            if (uploadError) {
+                alert('Photo upload failed: ' + uploadError.message);
+                return;
+            }
+
+            const { error: updateError } = await supabaseClient
+                .from('students')
+                .update({ photo_path: path })
+                .eq('id', studentId);
+
+            if (updateError) {
+                alert('Photo uploaded but failed to link to student: ' + updateError.message);
+            }
+        }
+
+        async function uploadPhotoForExistingStudent(inputEl, studentId) {
+            const file = inputEl.files[0];
+            if (!file) return;
+            await uploadStudentPhoto(studentId, file);
+            alert('Photo uploaded.');
+        }
+
+        // Builds the printable ID card, fetching a fresh signed URL for the photo
+        // each time since the bucket is private (no public URL stored).
+        async function openIdCard(studentId) {
+            const { data: s, error } = await supabaseClient
+                .from('students')
+                .select('full_name, roll_number, guardian_name, date_of_birth, photo_path, classes(grade, section)')
+                .eq('id', studentId)
+                .single();
+
+            if (error || !s) {
+                alert('Could not load student for ID card.');
+                return;
+            }
+
+            const classLabel = s.classes ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}` : 'N/A';
+
+            document.getElementById('idcSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('idcName').textContent = s.full_name;
+            document.getElementById('idcClass').textContent = classLabel;
+            document.getElementById('idcRoll').textContent = s.roll_number || 'N/A';
+            document.getElementById('idcGuardian').textContent = s.guardian_name || 'N/A';
+            document.getElementById('idcDob').textContent = s.date_of_birth || 'N/A';
+
+            const photoImg = document.getElementById('idcPhoto');
+            photoImg.style.display = 'none';
+            if (s.photo_path) {
+                const { data: signed } = await supabaseClient.storage
+                    .from('student-photos')
+                    .createSignedUrl(s.photo_path, 3600);
+                if (signed?.signedUrl) {
+                    photoImg.src = signed.signedUrl;
+                    photoImg.style.display = 'inline-block';
+                }
+            }
+
+            document.getElementById('idCardOverlay').style.display = 'block';
+        }
+
+        function closeIdCard() {
+            document.getElementById('idCardOverlay').style.display = 'none';
         }
 
         async function handleAddStudent() {
-            const name = document.getElementById('studentName').value;
-            const roll = document.getElementById('studentRoll').value;
+            const name = document.getElementById('studentName').value.trim();
+            const roll = document.getElementById('studentRoll').value.trim();
             // NEW (Step 4): this now reads a real classes.id from the dropdown,
             // not free text - it gets saved into the new class_id column.
             const classId = document.getElementById('studentClass').value;
+            const guardianName = document.getElementById('studentGuardianName').value.trim();
+            const dob = document.getElementById('studentDob').value;
+            const photoFile = document.getElementById('studentPhoto').files[0];
 
             if (!name || !roll) {
                 alert('Please fill in all required fields');
                 return;
             }
 
-            const { error } = await supabaseClient.from('students').insert({
+            const { data: inserted, error } = await supabaseClient.from('students').insert({
                 school_id: CURRENT_SCHOOL_ID,
                 full_name: name,
                 roll_number: roll,
                 class_id: classId || null,
+                guardian_name: guardianName || null,
+                date_of_birth: dob || null,
                 academic_year: CURRENT_ACADEMIC_YEAR
-            });
+            }).select('id').single();
 
             if (error) {
                 alert('Error adding student: ' + error.message);
                 return;
+            }
+
+            if (photoFile) {
+                await uploadStudentPhoto(inserted.id, photoFile);
             }
 
             hideAddStudentForm();

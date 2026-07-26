@@ -659,11 +659,12 @@
                                 <tr>
                                     <th>Full Name</th>
                                     <th>Role</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody id="staffList">
                                 <tr>
-                                    <td colspan="2" class="empty-state">Loading staff...</td>
+                                    <td colspan="3" class="empty-state">Loading staff...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -965,6 +966,55 @@
                     </div>
                 </div>
 
+                <!-- Student profile: attendance chart + grades chart, built from real
+                     data (RLS already limits a Teacher to their own students - clicking
+                     "Profile" on someone outside their access just returns nothing). -->
+                <div id="studentProfileOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
+                    <div style="max-width: 800px; margin: 0 auto;">
+                        <div class="no-print" style="margin-bottom: 24px;">
+                            <button class="btn" onclick="closeStudentProfile()"><i class="fas fa-times"></i> Close</button>
+                        </div>
+                        <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 16px;">
+                            <img id="spPhoto" src="" alt="" style="width: 90px; height: 90px; object-fit: cover; border-radius: 8px; border: 1px solid #ccc; display: none;" onerror="this.style.display='none'">
+                            <div>
+                                <h2 id="spName" style="margin: 0;"></h2>
+                                <p id="spDetails" style="margin: 4px 0; color: #555;"></p>
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                            <div>
+                                <h3 style="margin: 0 0 4px 0;">Attendance</h3>
+                                <p id="spAttendanceSummary" style="color: #555; margin: 0 0 12px 0;"></p>
+                                <canvas id="spAttendanceChart" height="200"></canvas>
+                            </div>
+                            <div>
+                                <h3 style="margin: 0 0 4px 0;">Exam Performance</h3>
+                                <p id="spGradesSummary" style="color: #555; margin: 0 0 12px 0;"></p>
+                                <canvas id="spGradesChart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Staff profile: no staff attendance module exists yet, so instead of
+                     faking a chart with data that doesn't exist, this shows a real
+                     teaching-load chart (periods/week per class) from the Timetable. -->
+                <div id="staffProfileOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
+                    <div style="max-width: 700px; margin: 0 auto;">
+                        <div class="no-print" style="margin-bottom: 24px;">
+                            <button class="btn" onclick="closeStaffProfile()"><i class="fas fa-times"></i> Close</button>
+                        </div>
+                        <div style="margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 16px;">
+                            <h2 id="stfName" style="margin: 0;"></h2>
+                            <p id="stfRole" style="margin: 4px 0; color: #555;"></p>
+                        </div>
+                        <h3 style="margin: 0 0 4px 0;">Teaching Load by Class</h3>
+                        <p id="stfLoadSummary" style="color: #555; margin: 0 0 12px 0;"></p>
+                        <canvas id="stfLoadChart" height="150"></canvas>
+                    </div>
+                </div>
+
                 <!-- Printable student ID card -->
                 <div id="idCardOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
                     <div style="max-width: 400px; margin: 0 auto;">
@@ -1044,6 +1094,8 @@
 
     <!-- Supabase Integration -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- NEW: for the student/staff profile attendance, grades, and teaching load charts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
     
     <script>
         const supabaseClient = window.supabase.createClient(
@@ -1221,6 +1273,7 @@
                         <td>
                             <input type="file" accept="image/*" style="width: 110px; font-size: 11px;" onchange="uploadPhotoForExistingStudent(this, '${s.id}')">
                             <button class="btn" style="margin-top: 4px;" onclick="openIdCard('${s.id}')">ID Card</button>
+                            <button class="btn btn-primary" style="margin-top: 4px;" onclick="openStudentProfile('${s.id}')">Profile</button>
                         </td>
                     </tr>
                 `;
@@ -1275,6 +1328,7 @@
                     <tr>
                         <td style="font-weight: 500;">${s.full_name}</td>
                         <td>${s.role || 'N/A'}</td>
+                        <td><button class="btn btn-primary" onclick="openStaffProfile('${s.id}')">Profile</button></td>
                     </tr>
                 `).join('');
         }
@@ -2405,6 +2459,148 @@
 
         function closeIdCard() {
             document.getElementById('idCardOverlay').style.display = 'none';
+        }
+
+        // ---- Student profile: attendance chart + exam performance chart ----
+
+        let spAttendanceChartInstance = null;
+        let spGradesChartInstance = null;
+
+        async function openStudentProfile(studentId) {
+            const [studentRes, attendanceRes, resultsRes] = await Promise.all([
+                supabaseClient.from('students').select('full_name, roll_number, guardian_name, date_of_birth, photo_path, classes(grade, section)').eq('id', studentId).single(),
+                supabaseClient.from('attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('student_id', studentId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('exam_results').select('marks_obtained, total_marks, exams(name, term)').eq('student_id', studentId)
+            ]);
+
+            if (studentRes.error || !studentRes.data) {
+                alert('Could not load this student - you may not have access to their class.');
+                return;
+            }
+            const s = studentRes.data;
+            const classLabel = s.classes ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}` : 'N/A';
+
+            document.getElementById('spName').textContent = s.full_name;
+            document.getElementById('spDetails').textContent =
+                `${classLabel} · Roll No: ${s.roll_number || 'N/A'} · Guardian: ${s.guardian_name || 'N/A'} · DOB: ${s.date_of_birth || 'N/A'}`;
+
+            const photoImg = document.getElementById('spPhoto');
+            photoImg.style.display = 'none';
+            if (s.photo_path) {
+                const { data: signed } = await supabaseClient.storage.from('student-photos').createSignedUrl(s.photo_path, 3600);
+                if (signed?.signedUrl) {
+                    photoImg.src = signed.signedUrl;
+                    photoImg.style.display = 'inline-block';
+                }
+            }
+
+            // Attendance: present vs absent, whole year
+            const attendance = attendanceRes.data || [];
+            const presentCount = attendance.filter(a => a.status === 'present').length;
+            const absentCount = attendance.filter(a => a.status === 'absent').length;
+            const attPct = attendance.length > 0 ? ((presentCount / attendance.length) * 100).toFixed(1) : '0.0';
+            document.getElementById('spAttendanceSummary').textContent =
+                attendance.length > 0 ? `${attPct}% present (${presentCount} present, ${absentCount} absent, ${attendance.length} days total)` : 'No attendance recorded yet';
+
+            if (spAttendanceChartInstance) spAttendanceChartInstance.destroy();
+            spAttendanceChartInstance = new Chart(document.getElementById('spAttendanceChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Present', 'Absent'],
+                    datasets: [{ data: [presentCount, absentCount], backgroundColor: ['#166534', '#991b1b'] }]
+                },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // Grades: percentage per exam, grouped by exam name+term
+            const results = resultsRes.data || [];
+            const byExam = {};
+            results.forEach(r => {
+                const label = r.exams ? `${r.exams.name} (${r.exams.term})` : 'Exam';
+                byExam[label] = byExam[label] || { obtained: 0, total: 0 };
+                byExam[label].obtained += Number(r.marks_obtained);
+                byExam[label].total += Number(r.total_marks);
+            });
+            const examLabels = Object.keys(byExam);
+            const examPercentages = examLabels.map(l => byExam[l].total > 0 ? ((byExam[l].obtained / byExam[l].total) * 100).toFixed(1) : 0);
+
+            document.getElementById('spGradesSummary').textContent =
+                examLabels.length > 0 ? `${examLabels.length} exam(s) recorded` : 'No exam results recorded yet';
+
+            if (spGradesChartInstance) spGradesChartInstance.destroy();
+            spGradesChartInstance = new Chart(document.getElementById('spGradesChart'), {
+                type: 'bar',
+                data: {
+                    labels: examLabels,
+                    datasets: [{ label: 'Percentage', data: examPercentages, backgroundColor: '#4f46e5' }]
+                },
+                options: { scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } } }
+            });
+
+            document.getElementById('studentProfileOverlay').style.display = 'block';
+        }
+
+        function closeStudentProfile() {
+            document.getElementById('studentProfileOverlay').style.display = 'none';
+        }
+
+        // ---- Staff profile: teaching load by class ----
+        // No staff attendance module exists yet, so this shows real data that
+        // does exist - how many periods/week they teach in each class, pulled
+        // from the Timetable (grade 4+) and their class-teacher assignment
+        // (grade 1-3, shown as a full day rather than a period count).
+
+        let stfLoadChartInstance = null;
+
+        async function openStaffProfile(staffId) {
+            const [staffRes, timetableRes, classTeacherRes] = await Promise.all([
+                supabaseClient.from('staff').select('full_name, role').eq('id', staffId).single(),
+                supabaseClient.from('timetable').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('class_teachers').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('is_class_teacher', true)
+            ]);
+
+            if (staffRes.error || !staffRes.data) {
+                alert('Could not load this staff member - you may not have access.');
+                return;
+            }
+
+            document.getElementById('stfName').textContent = staffRes.data.full_name;
+            document.getElementById('stfRole').textContent = staffRes.data.role || 'Staff';
+
+            const periodRows = timetableRes.data || [];
+            const classTeacherRows = classTeacherRes.data || [];
+
+            const loadByClass = {};
+            periodRows.forEach(r => {
+                const label = r.classes ? `Grade ${r.classes.grade}${r.classes.section ? '-' + r.classes.section : ''}` : 'Class';
+                loadByClass[label] = (loadByClass[label] || 0) + 1;
+            });
+            // Class-teacher assignments (grades 1-3) don't have periods - shown
+            // as a flat "5 days/week" bar so they still appear on the chart.
+            classTeacherRows.forEach(r => {
+                const label = r.classes ? `Grade ${r.classes.grade}${r.classes.section ? '-' + r.classes.section : ''} (Class Teacher)` : 'Class Teacher';
+                loadByClass[label] = 5;
+            });
+
+            const labels = Object.keys(loadByClass);
+            document.getElementById('stfLoadSummary').textContent =
+                labels.length > 0 ? `Teaching ${labels.length} class(es)` : 'Not currently assigned to any class or timetable slot';
+
+            if (stfLoadChartInstance) stfLoadChartInstance.destroy();
+            stfLoadChartInstance = new Chart(document.getElementById('stfLoadChart'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'Periods/week', data: Object.values(loadByClass), backgroundColor: '#0369a1' }]
+                },
+                options: { indexAxis: 'y', scales: { x: { beginAtZero: true } }, plugins: { legend: { display: false } } }
+            });
+
+            document.getElementById('staffProfileOverlay').style.display = 'block';
+        }
+
+        function closeStaffProfile() {
+            document.getElementById('staffProfileOverlay').style.display = 'none';
         }
 
         async function handleAddStudent() {

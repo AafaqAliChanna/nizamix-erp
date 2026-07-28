@@ -1400,11 +1400,12 @@
 
             document.getElementById('studentsList').innerHTML = students
                 .map(s => {
-                    // Prefer the real linked class; fall back to the old free-text
-                    // field for any student that hasn't been migrated to class_id yet.
+                    // The old free-text class/section columns are legacy and never
+                    // written to anymore - they'd always show the stale default ('1')
+                    // for any student, which looks like a real grade. Just say N/A.
                     const classLabel = s.classes
                         ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}`
-                        : (s.class || 'N/A');
+                        : 'N/A';
                     return `
                     <tr>
                         <td style="font-weight: 500;">${s.full_name}</td>
@@ -1631,13 +1632,17 @@
             const targetYear = nextAcademicYear(CURRENT_ACADEMIC_YEAR);
             const targetGrade = grade + 1;
 
-            const { data: targetClass, error: findError } = await supabaseClient
+            // .eq() doesn't reliably match NULL in PostgREST - a class with no
+            // section needs .is() instead, or promotion would silently fail to
+            // find its own target class.
+            let targetQuery = supabaseClient
                 .from('classes')
                 .select('id')
                 .eq('school_id', CURRENT_SCHOOL_ID)
-                .eq('grade', targetGrade)
-                .eq('section', section || null)
-                .maybeSingle();
+                .eq('grade', targetGrade);
+            targetQuery = section ? targetQuery.eq('section', section) : targetQuery.is('section', null);
+
+            const { data: targetClass, error: findError } = await targetQuery.maybeSingle();
 
             if (findError || !targetClass) {
                 alert(`No Grade ${targetGrade}${section ? '-' + section : ''} class exists yet. Create it first, then promote.`);
@@ -2062,7 +2067,12 @@
             const rows = document.querySelectorAll('#examMarksBody tr[data-student-id]');
             const studentsSnapshot = Array.from(rows).map(row => {
                 const marks = {};
-                examSubjectColumns.slice(0, -1).forEach(col => {
+                // No slicing here - a brand-new column just added has no input in
+                // the DOM yet, but the "if (input && ...)" check below already
+                // handles that safely. Slicing off the last column unconditionally
+                // used to also skip a genuinely existing column when one was
+                // REMOVED instead of added, silently discarding its unsaved marks.
+                examSubjectColumns.forEach(col => {
                     const input = row.querySelector(`input[data-subject="${col.subject}"]`);
                     if (input && input.value !== '') marks[col.subject] = Number(input.value);
                 });
@@ -2269,7 +2279,7 @@
         async function loadFeesForClass() {
             const classId = document.getElementById('feesClassFilter').value;
             document.getElementById('feesClassView').style.display = classId ? 'block' : 'none';
-            document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="7" class="empty-state">Pick a month and click "View Invoices"</td></tr>';
+            document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="4" class="empty-state">Pick a month and click "View Invoices"</td></tr>';
             if (!classId) return;
 
             document.getElementById('feesClassView').dataset.classId = classId;

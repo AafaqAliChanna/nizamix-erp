@@ -508,6 +508,23 @@
                         <span>Staff</span>
                     </button>
                 </li>
+                <!--
+                    NEW: "Admission" button in the sidebar menu.
+                    WHAT: this is a new page, separate from "Students".
+                    WHY: "Add Student" (inside the Students page) is a QUICK
+                    shortcut with only 3-4 boxes to fill in - good for adding a
+                    demo student fast, but a REAL school admission needs way
+                    more official info (parents' names, address, previous
+                    school, etc). Rather than making the quick form slow and
+                    scary with 15 boxes, we made a SECOND, bigger form just for
+                    real admissions, and gave it its own button here.
+                -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('admission')">
+                        <i class="fas fa-user-plus"></i>
+                        <span>Admission</span>
+                    </button>
+                </li>
                 <!-- NEW: Classes nav link, same pattern as Students/Staff above -->
                 <li class="nav-item">
                     <button class="nav-link" onclick="showPage('classes')">
@@ -698,6 +715,67 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+                <!--
+                    =========================================================
+                    NEW: Admission Page.
+                    WHAT: one big form, split into two clearly-labeled groups
+                    of boxes ("Student Information" and "Guardian / Family
+                    Information") so it doesn't feel like one giant wall of
+                    inputs. Submitting it creates a REAL student record - same
+                    students table as everywhere else in this app, just with
+                    a lot more filled in than the quick "Add Student" form.
+                    =========================================================
+                -->
+                <div class="page" id="admission">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">New Admission</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Full admission record for a new student</p>
+                    </div>
+
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <h3 style="margin: 0 0 16px 0;">Student Information</h3>
+                        <div class="input-group">
+                            <input id="admFullName" placeholder="Full name *">
+                            <input id="admRoll" placeholder="Roll number *">
+                            <select id="admClass" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <input id="admDob" type="date" title="Date of birth *">
+                            <select id="admGender" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                                <option value="">Gender *</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                            </select>
+                            <input id="admAdmissionDate" type="date" title="Admission date *">
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <input id="admPreviousSchool" placeholder="Previous school (if any)">
+                            <input id="admPhoto" type="file" accept="image/*" title="Photo (optional)">
+                        </div>
+                    </div>
+
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <h3 style="margin: 0 0 16px 0;">Guardian / Family Information</h3>
+                        <div class="input-group">
+                            <input id="admFatherName" placeholder="Father's name *">
+                            <input id="admMotherName" placeholder="Mother's name">
+                            <input id="admGuardianName" placeholder="Guardian name (if not a parent)">
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <input id="admGuardianCnic" placeholder="Guardian CNIC / B-Form number">
+                            <input id="admGuardianOccupation" placeholder="Guardian occupation">
+                            <input id="admGuardianPhone" placeholder="Guardian phone *">
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <input id="admGuardianEmail" type="email" placeholder="Guardian email">
+                            <input id="admAddress" placeholder="Home address *" style="flex: 2;">
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary" onclick="handleAdmission()"><i class="fas fa-check"></i> Submit Admission</button>
+                    <p style="color: var(--text-light); font-size: 13px; margin-top: 8px;">* Required fields</p>
                 </div>
 
                 <!-- NEW: Classes Page. Lists every class for this school; clicking a class
@@ -1374,6 +1452,9 @@
             // NEW (Step 4): load real classes before students, so the class
             // dropdown in "Add Student" is ready before anyone opens that form.
             await populateClassDropdown();
+            // NEW: Admission page's date box starts on today's date, same idea
+            // as the Fees month picker defaulting to the current month.
+            document.getElementById('admAdmissionDate').value = todayStr();
             await loadStudents();
             await loadStaff();
             // NEW: Classes page list, and the class filter on the Attendance page.
@@ -1446,9 +1527,17 @@
                 return;
             }
 
-            document.getElementById('studentClass').innerHTML = (data || [])
+            const optionsHtml = (data || [])
                 .map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`)
                 .join('');
+
+            // NEW: the Admission page has its own class dropdown (#admClass).
+            // WHY reuse this function instead of writing a second copy: it's
+            // the exact same list of classes, from the exact same query - no
+            // reason to ask Supabase for the same thing twice on the same
+            // page load. We just paint the same HTML into both boxes.
+            document.getElementById('studentClass').innerHTML = optionsHtml;
+            document.getElementById('admClass').innerHTML = optionsHtml;
         }
 
         // NEW: cached list of {id, full_name} for this school's staff, so the
@@ -2957,6 +3046,120 @@
             await loadStudents();
         }
 
+        /*
+            =====================================================================
+            NEW: handleAdmission() - runs when someone clicks "Submit Admission"
+            on the new Admission page.
+
+            WHAT this does, in plain steps:
+              1. Read every box the person typed into (there are a lot of them!).
+              2. Check that the REQUIRED ones (marked with * on the page) aren't
+                 empty. If any are missing, stop and tell the person which kind
+                 of info is missing - don't just silently fail.
+              3. Send ONE insert to Supabase with everything at once, creating
+                 a real row in the same "students" table used everywhere else
+                 in the app.
+              4. If a photo was chosen, upload it (reusing uploadStudentPhoto,
+                 the same function the Students page already uses - no need to
+                 write photo-uploading code twice).
+              5. Show a success message and empty out every box, so the form is
+                 ready for the NEXT new admission without any leftover text.
+
+            WHY it's a separate function from handleAddStudent(), even though
+            both of them end with "insert a student row": this form collects
+            8 MORE pieces of information (father's name, address, CNIC, etc.)
+            that the quick Add Student form doesn't ask for. Keeping them
+            separate means the quick form stays quick, and this one can be as
+            thorough as a real admission needs to be.
+            =====================================================================
+        */
+        async function handleAdmission() {
+            // Step 1: read every box. .trim() removes accidental extra spaces
+            // someone might type at the start/end (like " Ali " becoming "Ali").
+            const fullName = document.getElementById('admFullName').value.trim();
+            const roll = document.getElementById('admRoll').value.trim();
+            const classId = document.getElementById('admClass').value;
+            const dob = document.getElementById('admDob').value;
+            const gender = document.getElementById('admGender').value;
+            const admissionDate = document.getElementById('admAdmissionDate').value;
+            const previousSchool = document.getElementById('admPreviousSchool').value.trim();
+            const photoFile = document.getElementById('admPhoto').files[0];
+
+            const fatherName = document.getElementById('admFatherName').value.trim();
+            const motherName = document.getElementById('admMotherName').value.trim();
+            const guardianName = document.getElementById('admGuardianName').value.trim();
+            const guardianCnic = document.getElementById('admGuardianCnic').value.trim();
+            const guardianOccupation = document.getElementById('admGuardianOccupation').value.trim();
+            const guardianPhone = document.getElementById('admGuardianPhone').value.trim();
+            const guardianEmail = document.getElementById('admGuardianEmail').value.trim();
+            const address = document.getElementById('admAddress').value.trim();
+
+            // Step 2: check the REQUIRED ones. We build a list of what's
+            // missing (instead of stopping at the very first problem) so the
+            // person sees everything they still need to fill in, in one go,
+            // rather than fixing one box, clicking submit, finding the NEXT
+            // missing box, fixing that, clicking submit again...
+            const missing = [];
+            if (!fullName) missing.push('Full name');
+            if (!roll) missing.push('Roll number');
+            if (!classId) missing.push('Class');
+            if (!dob) missing.push('Date of birth');
+            if (!gender) missing.push('Gender');
+            if (!admissionDate) missing.push('Admission date');
+            if (!fatherName) missing.push("Father's name");
+            if (!guardianPhone) missing.push('Guardian phone');
+            if (!address) missing.push('Home address');
+
+            if (missing.length > 0) {
+                alert('Please fill in these required fields:\n\n' + missing.join('\n'));
+                return;
+            }
+
+            // Step 3: one insert, everything at once. If a box was left empty
+            // and it's NOT required (like Mother's Name), we save it as null
+            // instead of an empty string - null cleanly means "not provided",
+            // an empty string is messier to tell apart from "provided nothing".
+            const { data: inserted, error } = await supabaseClient.from('students').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                full_name: fullName,
+                roll_number: roll,
+                class_id: classId,
+                date_of_birth: dob,
+                gender: gender,
+                admission_date: admissionDate,
+                previous_school: previousSchool || null,
+                father_name: fatherName,
+                mother_name: motherName || null,
+                guardian_name: guardianName || fatherName,
+                guardian_cnic: guardianCnic || null,
+                guardian_occupation: guardianOccupation || null,
+                guardian_phone: guardianPhone,
+                guardian_email: guardianEmail || null,
+                address: address,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }).select('id').single();
+
+            if (error) {
+                alert('Error submitting admission: ' + error.message);
+                return;
+            }
+
+            // Step 4: photo, if one was chosen. Same helper function the
+            // Students page already uses - see uploadStudentPhoto() above.
+            if (photoFile) {
+                await uploadStudentPhoto(inserted.id, photoFile);
+            }
+
+            // Step 5: success message, then clear every box for the next admission.
+            alert(fullName + ' has been admitted successfully.');
+            document.querySelectorAll('#admission input').forEach(input => { input.value = ''; });
+            document.getElementById('admGender').value = '';
+            document.getElementById('admAdmissionDate').value = todayStr();
+
+            await loadStudents();
+            await loadClassesList();
+        }
+
         function showPage(pageId) {
             const pages = document.querySelectorAll('.page');
             pages.forEach(page => page.classList.remove('active'));
@@ -2970,6 +3173,7 @@
                 'dashboard': 'Dashboard',
                 'students': 'Student Management',
                 'staff': 'Staff Directory',
+                'admission': 'New Admission',
                 'classes': 'Classes',
                 'timetable': 'Timetable',
                 'exams': 'Exams',

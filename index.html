@@ -553,6 +553,19 @@
                         <span>Fees</span>
                     </button>
                 </li>
+                <!--
+                    NEW: Staff Attendance.
+                    WHY this is a SEPARATE page from the student "Attendance"
+                    page: staff aren't grouped into classes, so there's no
+                    "pick a class first" step needed - it's just one flat list
+                    of every staff member, mark present/absent, save.
+                -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('staffAttendance')">
+                        <i class="fas fa-user-check"></i>
+                        <span>Staff Attendance</span>
+                    </button>
+                </li>
                 <!-- NEW (Step 3): Attendance nav link, same pattern as Students/Staff above -->
                 <li class="nav-item">
                     <button class="nav-link" onclick="showPage('attendance')">
@@ -1119,7 +1132,7 @@
                      faking a chart with data that doesn't exist, this shows a real
                      teaching-load chart (periods/week per class) from the Timetable. -->
                 <div id="staffProfileOverlay" style="display: none; position: fixed; inset: 0; background: white; z-index: 999; overflow-y: auto; padding: 40px;">
-                    <div style="max-width: 700px; margin: 0 auto;">
+                    <div style="max-width: 800px; margin: 0 auto;">
                         <div class="no-print" style="margin-bottom: 24px;">
                             <button class="btn" onclick="closeStaffProfile()"><i class="fas fa-times"></i> Close</button>
                         </div>
@@ -1141,9 +1154,96 @@
                             <p id="stfAge" style="color: #555; margin: 8px 0 0 0;"></p>
                         </div>
 
-                        <h3 style="margin: 0 0 4px 0;">Teaching Load by Class</h3>
-                        <p id="stfLoadSummary" style="color: #555; margin: 0 0 12px 0;"></p>
-                        <canvas id="stfLoadChart" height="150"></canvas>
+                        <!--
+                            NEW: Professional Info (qualifications, experience, salary).
+                            WHAT: three boxes, same idea as Contact Info above.
+                            WHY salary is different from everything else here: it's
+                            money, so ONLY a Principal should ever see or change
+                            anyone else's salary. A Teacher CAN see their OWN salary
+                            (that's normal - people know their own pay), but the
+                            boxes below get locked (disabled, greyed out, no Save
+                            button) unless the logged-in person is a Principal.
+                            The actual JavaScript that decides this lives in
+                            openStaffProfile() - look for "applyRoleBasedEditing"
+                            in there.
+                        -->
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <h3 style="margin: 0 0 12px 0;">Professional Info</h3>
+                            <div class="input-group">
+                                <textarea id="stfQualifications" placeholder="Qualifications, e.g. M.Ed - Punjab University (2018)" rows="2" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit;"></textarea>
+                            </div>
+                            <div class="input-group" style="margin-top: 12px;">
+                                <textarea id="stfExperience" placeholder="Experience, e.g. 5 years at XYZ School (2019-2024)" rows="2" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit;"></textarea>
+                            </div>
+                            <div class="input-group" style="margin-top: 12px;">
+                                <input id="stfSalary" type="number" min="0" placeholder="Monthly salary">
+                                <button id="stfProfessionalSaveBtn" class="btn btn-primary" onclick="saveStaffProfessionalInfo()"><i class="fas fa-check"></i> Save</button>
+                            </div>
+                        </div>
+
+                        <!-- NEW: Emergency Contact - same Principal-only editing rule as
+                             Professional Info above. -->
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <h3 style="margin: 0 0 12px 0;">Emergency Contact</h3>
+                            <div class="input-group">
+                                <input id="stfEmergencyName" placeholder="Contact name">
+                                <input id="stfEmergencyPhone" placeholder="Contact phone">
+                                <input id="stfEmergencyRelation" placeholder="Relation, e.g. Spouse, Sibling">
+                                <button id="stfEmergencySaveBtn" class="btn btn-primary" onclick="saveStaffEmergencyContact()"><i class="fas fa-check"></i> Save</button>
+                            </div>
+                        </div>
+
+                        <!-- NEW: subjects taught, pulled straight from the Timetable data
+                             that already exists - not a new thing to fill in by hand. -->
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <h3 style="margin: 0 0 4px 0;">Subjects Assigned</h3>
+                            <p id="stfSubjectsList" style="color: #555; margin: 0;"></p>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+                            <div>
+                                <h3 style="margin: 0 0 4px 0;">Teaching Load by Class</h3>
+                                <p id="stfLoadSummary" style="color: #555; margin: 0 0 12px 0;"></p>
+                                <canvas id="stfLoadChart" height="180"></canvas>
+                            </div>
+                            <div>
+                                <!--
+                                    NEW: Staff Attendance.
+                                    WHAT: a chart (present vs absent, this year) PLUS two
+                                    buttons to mark TODAY's attendance right now.
+                                    WHY two allowed people can click these buttons: either
+                                    the teacher marking THEMSELVES present (self-service,
+                                    like clocking in), or the Principal marking it for
+                                    them. Both are allowed by the database rules we just
+                                    added (staff_attendance_insert_scoped) - anyone else
+                                    would get an error if they tried.
+                                -->
+                                <h3 style="margin: 0 0 4px 0;">Attendance</h3>
+                                <p id="stfAttendanceSummary" style="color: #555; margin: 0 0 12px 0;"></p>
+                                <canvas id="stfAttendanceChart" height="180"></canvas>
+                                <div class="no-print" style="margin-top: 12px; display: flex; gap: 8px;">
+                                    <button class="btn btn-primary" onclick="markStaffAttendance('present')">Mark Present Today</button>
+                                    <button class="btn" onclick="markStaffAttendance('absent')">Mark Absent Today</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- NEW: Documents - Principal-only (see staff_documents RLS).
+                             A Teacher viewing their own profile just won't see an
+                             upload box here, and the list will come back empty for
+                             them (RLS blocks it, not a broken feature). -->
+                        <div class="table-container">
+                            <h3 style="margin: 0 0 12px 0;">Documents</h3>
+                            <div id="stfDocumentUploadRow" class="input-group" style="margin-bottom: 12px;">
+                                <input id="stfDocumentName" placeholder="Document name, e.g. CNIC Copy, Degree Certificate">
+                                <input id="stfDocumentFile" type="file">
+                                <button class="btn btn-secondary" onclick="uploadStaffDocument()"><i class="fas fa-upload"></i> Upload</button>
+                            </div>
+                            <table>
+                                <thead><tr><th>Document</th><th>Uploaded</th><th></th></tr></thead>
+                                <tbody id="stfDocumentsList"><tr><td colspan="3" class="empty-state">No documents uploaded</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -2923,14 +3023,49 @@
         // (grade 1-3, shown as a full day rather than a period count).
 
         let stfLoadChartInstance = null;
+        let stfAttendanceChartInstance = null;
         let currentStaffProfileId = null;
+
+        /*
+            NEW: applyRoleBasedEditing()
+            WHAT: locks (or unlocks) the Professional Info and Emergency Contact
+            boxes, depending on who's looking at this profile.
+            WHY as its own small function instead of copy-pasting this logic
+            twice: both sections follow the EXACT same rule ("only a Principal
+            can type in these boxes"), so writing the rule once and calling it
+            for both is less code to maintain, and if the rule ever changes we
+            only fix it in one place.
+            The actual SECURITY still lives in the database (RLS) - this is
+            just about not showing someone a box that would fail anyway if
+            they tried to use it. A locked box here is a courtesy, not the
+            real lock.
+        */
+        function applyRoleBasedEditing() {
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+            const lockedIds = ['stfQualifications', 'stfExperience', 'stfSalary', 'stfEmergencyName', 'stfEmergencyPhone', 'stfEmergencyRelation'];
+            lockedIds.forEach(id => {
+                document.getElementById(id).disabled = !isPrincipal;
+            });
+            document.getElementById('stfProfessionalSaveBtn').style.display = isPrincipal ? 'inline-flex' : 'none';
+            document.getElementById('stfEmergencySaveBtn').style.display = isPrincipal ? 'inline-flex' : 'none';
+            // Documents: Principal-only per staff_documents RLS - hide the
+            // upload row entirely for anyone else, rather than showing an
+            // upload box that would just fail.
+            document.getElementById('stfDocumentUploadRow').style.display = isPrincipal ? 'flex' : 'none';
+        }
 
         async function openStaffProfile(staffId) {
             currentStaffProfileId = staffId;
-            const [staffRes, timetableRes, classTeacherRes] = await Promise.all([
-                supabaseClient.from('staff').select('full_name, role, phone, email, date_of_birth').eq('id', staffId).single(),
-                supabaseClient.from('timetable').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
-                supabaseClient.from('class_teachers').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('is_class_teacher', true)
+
+            // One big batch of requests, all fired at once (Promise.all) instead
+            // of one after another - this is just faster, since the browser
+            // doesn't have to wait for request #1 to finish before starting #2.
+            const [staffRes, timetableRes, classTeacherRes, attendanceRes, documentsRes] = await Promise.all([
+                supabaseClient.from('staff').select('full_name, role, phone, email, date_of_birth, qualifications, experience, salary, emergency_contact_name, emergency_contact_phone, emergency_contact_relation').eq('id', staffId).single(),
+                supabaseClient.from('timetable').select('class_id, subject, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('class_teachers').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('is_class_teacher', true),
+                supabaseClient.from('staff_attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('staff_documents').select('id, document_name, file_path, uploaded_at').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).order('uploaded_at', { ascending: false })
             ]);
 
             if (staffRes.error || !staffRes.data) {
@@ -2947,8 +3082,29 @@
             const age = calculateAge(stf.date_of_birth);
             document.getElementById('stfAge').textContent = age !== null ? `Age: ${age}` : '';
 
+            // NEW: Professional Info + Emergency Contact - just pour the saved
+            // values into their boxes, same idea as Contact Info above.
+            document.getElementById('stfQualifications').value = stf.qualifications || '';
+            document.getElementById('stfExperience').value = stf.experience || '';
+            document.getElementById('stfSalary').value = stf.salary ?? '';
+            document.getElementById('stfEmergencyName').value = stf.emergency_contact_name || '';
+            document.getElementById('stfEmergencyPhone').value = stf.emergency_contact_phone || '';
+            document.getElementById('stfEmergencyRelation').value = stf.emergency_contact_relation || '';
+
+            // Lock the boxes above if this viewer isn't a Principal - see the
+            // big comment on applyRoleBasedEditing() for why.
+            applyRoleBasedEditing();
+
             const periodRows = timetableRes.data || [];
             const classTeacherRows = classTeacherRes.data || [];
+
+            // NEW: Subjects Assigned - just the UNIQUE subject names from the
+            // timetable rows we already fetched. Set (like a bag that
+            // automatically throws away duplicates) is the easiest way to turn
+            // "Math, Math, Science, Math, English" into "Math, Science, English".
+            const uniqueSubjects = [...new Set(periodRows.map(r => r.subject))];
+            document.getElementById('stfSubjectsList').textContent =
+                uniqueSubjects.length > 0 ? uniqueSubjects.join(', ') : 'No subjects assigned yet (via Timetable)';
 
             const loadByClass = {};
             periodRows.forEach(r => {
@@ -2975,6 +3131,27 @@
                 },
                 options: { indexAxis: 'y', scales: { x: { beginAtZero: true } }, plugins: { legend: { display: false } } }
             });
+
+            // NEW: Staff Attendance chart - present vs absent, same doughnut
+            // style as the student profile's attendance chart, so the app
+            // stays visually consistent.
+            const attRows = attendanceRes.data || [];
+            const presentCount = attRows.filter(a => a.status === 'present').length;
+            const absentCount = attRows.filter(a => a.status === 'absent').length;
+            document.getElementById('stfAttendanceSummary').textContent =
+                attRows.length > 0 ? `${presentCount} present, ${absentCount} absent (${attRows.length} days recorded)` : 'No attendance recorded yet';
+
+            if (stfAttendanceChartInstance) stfAttendanceChartInstance.destroy();
+            stfAttendanceChartInstance = new Chart(document.getElementById('stfAttendanceChart'), {
+                type: 'doughnut',
+                data: { labels: ['Present', 'Absent'], datasets: [{ data: [presentCount, absentCount], backgroundColor: ['#166534', '#991b1b'] }] },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // NEW: Documents list - Principal-only per RLS, so a Teacher will
+            // just get an empty list back here (not an error).
+            const documents = documentsRes.data || [];
+            renderStaffDocumentsList(documents);
 
             document.getElementById('staffProfileOverlay').style.display = 'block';
         }
@@ -3004,6 +3181,168 @@
             const age = calculateAge(dob);
             document.getElementById('stfAge').textContent = age !== null ? `Age: ${age}` : '';
             alert('Contact info saved.');
+        }
+
+        // NEW: saves Qualifications + Experience + Salary in one go - Principal
+        // only (same database rule as saveStaffContactInfo above).
+        async function saveStaffProfessionalInfo() {
+            const qualifications = document.getElementById('stfQualifications').value.trim();
+            const experience = document.getElementById('stfExperience').value.trim();
+            const salaryValue = document.getElementById('stfSalary').value;
+
+            const { error } = await supabaseClient
+                .from('staff')
+                .update({
+                    qualifications: qualifications || null,
+                    experience: experience || null,
+                    salary: salaryValue === '' ? null : Number(salaryValue)
+                })
+                .eq('id', currentStaffProfileId);
+
+            if (error) {
+                alert('Error saving professional info: ' + error.message);
+                return;
+            }
+            alert('Professional info saved.');
+        }
+
+        // NEW: saves the emergency contact's name/phone/relation.
+        async function saveStaffEmergencyContact() {
+            const name = document.getElementById('stfEmergencyName').value.trim();
+            const phone = document.getElementById('stfEmergencyPhone').value.trim();
+            const relation = document.getElementById('stfEmergencyRelation').value.trim();
+
+            const { error } = await supabaseClient
+                .from('staff')
+                .update({
+                    emergency_contact_name: name || null,
+                    emergency_contact_phone: phone || null,
+                    emergency_contact_relation: relation || null
+                })
+                .eq('id', currentStaffProfileId);
+
+            if (error) {
+                alert('Error saving emergency contact: ' + error.message);
+                return;
+            }
+            alert('Emergency contact saved.');
+        }
+
+        /*
+            NEW: markStaffAttendance(status)
+            WHAT: writes (or overwrites) TODAY's attendance row for whichever
+            staff profile is currently open.
+            WHY "upsert" instead of plain insert: if someone accidentally
+            clicks "Mark Absent" and then realizes they meant "Mark Present",
+            clicking the other button should just CORRECT today's row, not
+            create a second, conflicting one. The unique(staff_id, date) rule
+            we added in the database is what makes upsert smart enough to
+            update the existing row instead of erroring out.
+        */
+        async function markStaffAttendance(status) {
+            const { error } = await supabaseClient.from('staff_attendance').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                staff_id: currentStaffProfileId,
+                date: todayStr(),
+                status: status,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }, { onConflict: 'staff_id,date' });
+
+            if (error) {
+                alert('Error marking attendance: ' + error.message);
+                return;
+            }
+
+            alert(`Marked ${status} for today.`);
+            await openStaffProfile(currentStaffProfileId); // refresh the chart with the new data
+        }
+
+        // NEW: turns the list of document rows into the table you see on
+        // screen. Its own function (instead of inline) because we call it
+        // from two places: right after loading the profile, and again right
+        // after a new upload finishes.
+        function renderStaffDocumentsList(documents) {
+            if (documents.length === 0) {
+                document.getElementById('stfDocumentsList').innerHTML = '<tr><td colspan="3" class="empty-state">No documents uploaded</td></tr>';
+                return;
+            }
+            document.getElementById('stfDocumentsList').innerHTML = documents.map(d => `
+                <tr>
+                    <td>${d.document_name}</td>
+                    <td>${new Date(d.uploaded_at).toLocaleDateString()}</td>
+                    <td><button class="btn" onclick="downloadStaffDocument('${d.file_path}', '${d.document_name.replace(/'/g, "\\'")}')">Download</button></td>
+                </tr>
+            `).join('');
+        }
+
+        // NEW: uploads a file to the private staff-documents bucket, then
+        // saves a row describing it (name + where it lives) in the database.
+        // Two separate steps because Storage (the file itself) and the
+        // database (info ABOUT the file) are two different systems in
+        // Supabase - the file's bytes live in Storage, everything else about
+        // it lives in a normal table.
+        async function uploadStaffDocument() {
+            const docName = document.getElementById('stfDocumentName').value.trim();
+            const file = document.getElementById('stfDocumentFile').files[0];
+
+            if (!docName || !file) {
+                alert('Enter a document name and choose a file.');
+                return;
+            }
+
+            // Path includes a timestamp so uploading two files with the same
+            // name doesn't overwrite one another by accident.
+            const path = `${CURRENT_SCHOOL_ID}/${currentStaffProfileId}/${Date.now()}_${file.name}`;
+
+            const { error: uploadError } = await supabaseClient.storage
+                .from('staff-documents')
+                .upload(path, file);
+
+            if (uploadError) {
+                alert('Upload failed: ' + uploadError.message);
+                return;
+            }
+
+            const { error: insertError } = await supabaseClient.from('staff_documents').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                staff_id: currentStaffProfileId,
+                document_name: docName,
+                file_path: path
+            });
+
+            if (insertError) {
+                alert('File uploaded but failed to save its record: ' + insertError.message);
+                return;
+            }
+
+            document.getElementById('stfDocumentName').value = '';
+            document.getElementById('stfDocumentFile').value = '';
+
+            const { data: documents } = await supabaseClient
+                .from('staff_documents')
+                .select('id, document_name, file_path, uploaded_at')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('staff_id', currentStaffProfileId)
+                .order('uploaded_at', { ascending: false });
+
+            renderStaffDocumentsList(documents || []);
+            alert('Document uploaded.');
+        }
+
+        // NEW: the bucket is private, so we can't just link straight to the
+        // file - we ask Supabase for a temporary "signed URL" (a link that
+        // works for a little while, then stops working) and open that instead.
+        async function downloadStaffDocument(filePath, docName) {
+            const { data: signed, error } = await supabaseClient.storage
+                .from('staff-documents')
+                .createSignedUrl(filePath, 3600);
+
+            if (error || !signed?.signedUrl) {
+                alert('Could not open this document: ' + (error?.message || 'unknown error'));
+                return;
+            }
+
+            window.open(signed.signedUrl, '_blank');
         }
 
         async function handleAddStudent() {

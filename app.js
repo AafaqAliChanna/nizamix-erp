@@ -1,0 +1,3027 @@
+const supabaseClient = window.supabase.createClient(
+            'https://ypiamdjdxploowjubibj.supabase.co',
+            'sb_publishable_Ci3pvImXio3xZ3gk3PTsaA_wZar0bIn'
+        );
+        // CHANGED: was `const CURRENT_SCHOOL_ID = '<hardcoded uuid>'`, which meant every
+        // school would see Baaz's data. These are now resolved live per login by
+        // resolveSchoolContext() below, from the logged-in user's own staff row.
+        let CURRENT_SCHOOL_ID = null;
+        let CURRENT_SCHOOL_NAME = '';
+        let CURRENT_STAFF_NAME = '';
+        let CURRENT_STAFF_ROLE = '';
+        // Matches the DB default on students/attendance/timetable.academic_year.
+        // Change this one line at the start of a new school year.
+        const CURRENT_ACADEMIC_YEAR = '2026-2027';
+        // Generic Pakistani-school passing threshold - adjust if Baaz uses a
+        // different minimum (some use 33%, some 40%).
+        const PASSING_PERCENTAGE = 40;
+
+        // NEW: figures out which school the logged-in user belongs to, by looking
+        // up their own staff row (staff.id = the logged-in auth user's id, enforced
+        // by the FK to auth.users). This is what makes the same index.html work for
+        // any school - nothing here is specific to Baaz.
+        async function resolveSchoolContext() {
+            const { data: { user } } = await supabaseClient.auth.getUser();
+            if (!user) return false;
+
+            const { data: staffRow, error: staffError } = await supabaseClient
+                .from('staff')
+                .select('school_id, full_name, role')
+                .eq('id', user.id)
+                .maybeSingle();
+
+            if (staffError || !staffRow) {
+                alert('This account is not linked to a staff record for any school. Contact your administrator.');
+                await supabaseClient.auth.signOut();
+                showLogin();
+                return false;
+            }
+
+            CURRENT_SCHOOL_ID = staffRow.school_id;
+            CURRENT_STAFF_NAME = staffRow.full_name || '';
+            CURRENT_STAFF_ROLE = staffRow.role || 'Staff';
+
+            const { data: schoolRow } = await supabaseClient
+                .from('schools')
+                .select('name')
+                .eq('id', CURRENT_SCHOOL_ID)
+                .maybeSingle();
+
+            CURRENT_SCHOOL_NAME = schoolRow?.name || 'School';
+
+            setSchoolBranding();
+            return true;
+        }
+
+        // NEW: pushes the resolved school/staff info into the UI - sidebar, browser
+        // tab, dashboard welcome text, and the header user badge.
+        function setSchoolBranding() {
+            document.title = CURRENT_SCHOOL_NAME;
+            document.getElementById('sidebarSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('academicYearLabel').textContent = 'Academic Year: ' + CURRENT_ACADEMIC_YEAR;
+            document.getElementById('dashboardWelcome').textContent = 'Welcome to ' + CURRENT_SCHOOL_NAME + ' ERP System';
+            document.getElementById('userName').textContent = CURRENT_STAFF_NAME || 'Staff';
+            document.getElementById('userRole').textContent = CURRENT_STAFF_ROLE;
+            document.getElementById('userInitial').textContent = (CURRENT_STAFF_NAME || 'S').charAt(0).toUpperCase();
+        }
+
+        // Check if user is logged in
+        async function checkSession() {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (session) {
+                const ok = await resolveSchoolContext();
+                if (!ok) return;
+                showApp();
+                await loadData();
+            } else {
+                showLogin();
+            }
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            
+            if (error) {
+                document.getElementById('loginMessage').className = 'login-message error';
+                document.getElementById('loginMessage').textContent = error.message;
+                return;
+            }
+
+            if (data?.session) {
+                const ok = await resolveSchoolContext();
+                if (!ok) return;
+                document.getElementById('loginMessage').className = 'login-message success';
+                document.getElementById('loginMessage').textContent = 'Login successful!';
+                setTimeout(() => {
+                    showApp();
+                    loadData();
+                }, 500);
+            }
+        }
+
+        async function handleLogout() {
+            await supabaseClient.auth.signOut();
+            showLogin();
+            document.getElementById('loginEmail').value = '';
+            document.getElementById('loginPassword').value = '';
+        }
+
+        function showLogin() {
+            document.getElementById('loginContainer').classList.add('show');
+            document.getElementById('appContainer').classList.remove('show');
+        }
+
+        function showApp() {
+            document.getElementById('loginContainer').classList.remove('show');
+            document.getElementById('appContainer').classList.add('show');
+        }
+
+        let dashAttendanceChartInstance = null;
+        let dashFeesChartInstance = null;
+        let dashDefaulterChartInstance = null;
+
+        async function loadDashboardCharts() {
+            // ---- School-wide attendance ----
+            const { data: attendanceData } = await supabaseClient
+                .from('attendance')
+                .select('status')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            const attRows = attendanceData || [];
+            const presentCount = attRows.filter(a => a.status === 'present').length;
+            const absentCount = attRows.filter(a => a.status === 'absent').length;
+            const attPct = attRows.length > 0 ? ((presentCount / attRows.length) * 100).toFixed(1) : '0.0';
+            document.getElementById('dashAttendanceSummary').textContent =
+                attRows.length > 0 ? `${attPct}% average attendance across the school` : 'No attendance recorded yet';
+
+            if (dashAttendanceChartInstance) dashAttendanceChartInstance.destroy();
+            dashAttendanceChartInstance = new Chart(document.getElementById('dashAttendanceChart'), {
+                type: 'doughnut',
+                data: { labels: ['Present', 'Absent'], datasets: [{ data: [presentCount, absentCount], backgroundColor: ['#166534', '#991b1b'] }] },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // ---- Fees: paid vs unpaid, and defaulter severity ----
+            // Principal-only via RLS - a Teacher account gets an empty result here,
+            // not an error, and the charts/tables below just show empty states.
+            const { data: feeData } = await supabaseClient
+                .from('fee_invoices')
+                .select('student_id, paid')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            const feeRows = feeData || [];
+            const paidCount = feeRows.filter(f => f.paid).length;
+            const unpaidCount = feeRows.filter(f => !f.paid).length;
+
+            document.getElementById('dashFeesSummary').textContent = feeRows.length > 0
+                ? `${((paidCount / feeRows.length) * 100).toFixed(1)}% of invoices paid (${unpaidCount} unpaid)`
+                : 'No fee invoices generated yet';
+
+            if (dashFeesChartInstance) dashFeesChartInstance.destroy();
+            dashFeesChartInstance = new Chart(document.getElementById('dashFeesChart'), {
+                type: 'doughnut',
+                data: { labels: ['Paid', 'Unpaid'], datasets: [{ data: [paidCount, unpaidCount], backgroundColor: ['#166534', '#991b1b'] }] },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // Defaulter severity, counted per student across all months generated
+            // this year. NOTE: "month" is a free-text label, not a real date, so
+            // this is total unpaid invoices as a proxy for "how far behind" -
+            // not verified as strictly consecutive months.
+            const unpaidByStudent = {};
+            feeRows.forEach(f => {
+                if (!f.paid) unpaidByStudent[f.student_id] = (unpaidByStudent[f.student_id] || 0) + 1;
+            });
+            const allStudentIds = [...new Set(feeRows.map(f => f.student_id))];
+
+            let good = 0, stillTime = 0, notGood = 0, veryBad = 0;
+            const veryBadIds = [];
+            allStudentIds.forEach(id => {
+                const count = unpaidByStudent[id] || 0;
+                if (count === 0) good++;
+                else if (count === 1) stillTime++;
+                else if (count === 2) notGood++;
+                else { veryBad++; veryBadIds.push(id); }
+            });
+
+            if (dashDefaulterChartInstance) dashDefaulterChartInstance.destroy();
+            dashDefaulterChartInstance = new Chart(document.getElementById('dashDefaulterChart'), {
+                type: 'bar',
+                data: {
+                    labels: ['Good (Paid)', 'Still Have Time (1 unpaid)', 'Not Good (2 unpaid)', 'Very Bad (3+ unpaid)'],
+                    datasets: [{ data: [good, stillTime, notGood, veryBad], backgroundColor: ['#166534', '#ca8a04', '#ea580c', '#991b1b'] }]
+                },
+                options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
+            });
+
+            // Very Bad list - who to actually call
+            if (veryBadIds.length > 0) {
+                const { data: veryBadStudents } = await supabaseClient
+                    .from('students')
+                    .select('id, full_name, guardian_phone, classes(grade, section)')
+                    .in('id', veryBadIds);
+
+                document.getElementById('dashVeryBadList').innerHTML = (veryBadStudents || []).map(s => {
+                    const classLabel = s.classes ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}` : 'N/A';
+                    return `<tr><td>${s.full_name}</td><td>${classLabel}</td><td>${s.guardian_phone || 'No number on file'}</td><td>${unpaidByStudent[s.id] || 0}</td></tr>`;
+                }).join('');
+            } else {
+                document.getElementById('dashVeryBadList').innerHTML = '<tr><td colspan="4" class="empty-state">No severe defaulters right now</td></tr>';
+            }
+        }
+
+        async function loadData() {
+            // NEW (Step 4): load real classes before students, so the class
+            // dropdown in "Add Student" is ready before anyone opens that form.
+            await populateClassDropdown();
+            // NEW: Admission page's date box starts on today's date, same idea
+            // as the Fees month picker defaulting to the current month.
+            document.getElementById('admAdmissionDate').value = todayStr();
+            await loadStudents();
+            await loadStaff();
+            // NEW: Classes page list, and the class filter on the Attendance page.
+            await loadClassesList();
+            await populateAttendanceClassFilter();
+            await populateTimetableClassFilter();
+            await loadSubjects();
+            await populateCurriculumFilters();
+            await populateHomeworkClassFilter();
+            await populateAnnouncementClassFilter();
+            await loadAnnouncements();
+            await populateMessageClassFilter();
+            await populateExamClassFilter();
+            await populateFeesClassFilter();
+            await loadAttendance();
+            await loadDashboardCharts();
+        }
+
+        async function loadStudents() {
+            // NEW (Step 4): select('*, classes(grade, section)') joins the classes
+            // table through class_id, so we can show "Grade 5" instead of a UUID
+            // or the old inconsistent free-text value.
+            const { data, error } = await supabaseClient
+                .from('students')
+                .select('*, classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            if (error) {
+                document.getElementById('studentsList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const students = data || [];
+            document.getElementById('totalStudents').textContent = students.length;
+
+            if (students.length === 0) {
+                document.getElementById('studentsList').innerHTML = '<tr><td colspan="4" class="empty-state">No students added yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('studentsList').innerHTML = students
+                .map(s => {
+                    // The old free-text class/section columns are legacy and never
+                    // written to anymore - they'd always show the stale default ('1')
+                    // for any student, which looks like a real grade. Just say N/A.
+                    const classLabel = s.classes
+                        ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}`
+                        : 'N/A';
+                    return `
+                    <tr>
+                        <td style="font-weight: 500;">${s.full_name}</td>
+                        <td style="color: var(--text-light); font-family: monospace;">${s.roll_number}</td>
+                        <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">${classLabel}</span></td>
+                        <td>
+                            <input type="file" accept="image/*" style="width: 110px; font-size: 11px;" onchange="uploadPhotoForExistingStudent(this, '${s.id}')">
+                            <button class="btn" style="margin-top: 4px;" onclick="openIdCard('${s.id}')">ID Card</button>
+                            <button class="btn btn-primary" style="margin-top: 4px;" onclick="openStudentProfile('${s.id}')">Profile</button>
+                        </td>
+                    </tr>
+                `;
+                }).join('');
+        }
+
+        // NEW (Step 4): fills the "Class" dropdown in the Add Student form with
+        // every real class row for this school, ordered by grade.
+        async function populateClassDropdown() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for dropdown:', error);
+                return;
+            }
+
+            const optionsHtml = (data || [])
+                .map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`)
+                .join('');
+
+            // NEW: the Admission page has its own class dropdown (#admClass).
+            // WHY reuse this function instead of writing a second copy: it's
+            // the exact same list of classes, from the exact same query - no
+            // reason to ask Supabase for the same thing twice on the same
+            // page load. We just paint the same HTML into both boxes.
+            document.getElementById('studentClass').innerHTML = optionsHtml;
+            document.getElementById('admClass').innerHTML = optionsHtml;
+        }
+
+        // NEW: cached list of {id, full_name} for this school's staff, so the
+        // Timetable page can build teacher dropdowns without a fresh query per cell.
+        let staffCache = [];
+
+        async function loadStaff() {
+            const { data, error } = await supabaseClient
+                .from('staff')
+                .select('*')
+                .eq('school_id', CURRENT_SCHOOL_ID);
+
+            if (error) {
+                document.getElementById('staffList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const staff = data || [];
+            staffCache = staff;
+            document.getElementById('totalStaff').textContent = staff.length;
+
+            if (staff.length === 0) {
+                document.getElementById('staffList').innerHTML = '<tr><td colspan="3" class="empty-state">No staff added yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('staffList').innerHTML = staff
+                .map(s => `
+                    <tr>
+                        <td style="font-weight: 500;">${s.full_name}</td>
+                        <td>${s.role || 'N/A'}</td>
+                        <td><button class="btn btn-primary" onclick="openStaffProfile('${s.id}')">Profile</button></td>
+                    </tr>
+                `).join('');
+        }
+
+        // ---- Classes page + class-based attendance (shared helpers) ----
+
+        // Today's date as YYYY-MM-DD, used to default every date picker.
+        function todayStr() {
+            return new Date().toISOString().split('T')[0];
+        }
+
+        // Renders one <tr> per student into a table body, each with a Present/Absent
+        // dropdown. Used by both the Classes page detail view and the Attendance page.
+        // data-student-id on the <tr> is how we read back who's being marked.
+        function renderAttendanceRows(students, tbodyId) {
+            const tbody = document.getElementById(tbodyId);
+            if (!students || students.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No students in this class yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = students.map(s => `
+                <tr data-student-id="${s.id}">
+                    <td style="font-weight: 500;">${s.full_name}</td>
+                    <td style="color: var(--text-light); font-family: monospace;">${s.roll_number || 'N/A'}</td>
+                    <td>
+                        <select style="padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px;">
+                            <option value="present">Present</option>
+                            <option value="absent">Absent</option>
+                        </select>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Reads every row in a table body (built by renderAttendanceRows) and upserts
+        // one attendance row per student for the given date. Same upsert + unique
+        // (student_id, date) approach as before, just looped over a whole class.
+        async function saveAttendanceRows(tbodyId, dateInputId) {
+            const date = document.getElementById(dateInputId).value;
+            if (!date) {
+                alert('Please pick a date.');
+                return;
+            }
+            const rows = document.querySelectorAll(`#${tbodyId} tr[data-student-id]`);
+            if (rows.length === 0) {
+                alert('No students to mark.');
+                return;
+            }
+
+            const records = Array.from(rows).map(row => ({
+                school_id: CURRENT_SCHOOL_ID,
+                student_id: row.dataset.studentId,
+                date: date,
+                status: row.querySelector('select').value,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }));
+
+            const { error } = await supabaseClient
+                .from('attendance')
+                .upsert(records, { onConflict: 'student_id,date' });
+
+            if (error) {
+                alert('Error saving attendance: ' + error.message);
+                return;
+            }
+
+            alert('Attendance saved for ' + records.length + ' student(s).');
+            await loadAttendance();
+        }
+
+        // Fetches every student in one class, school-scoped like everywhere else.
+        async function getStudentsForClass(classId) {
+            const { data, error } = await supabaseClient
+                .from('students')
+                .select('id, full_name, roll_number')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            if (error) {
+                console.error('Failed to load students for class:', error);
+                return [];
+            }
+            return data || [];
+        }
+
+        // ---- Classes page ----
+
+        // Lists every class as a row with a "View Students" button.
+        async function loadClassesList() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section, students(count)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                document.getElementById('classesList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const classes = data || [];
+            // NEW: feeds the Total Classes dashboard card
+            document.getElementById('totalClasses').textContent = classes.length;
+            if (classes.length === 0) {
+                document.getElementById('classesList').innerHTML = '<tr><td colspan="3" class="empty-state">No classes added yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('classesList').innerHTML = classes.map(c => {
+                const label = `Grade ${c.grade}${c.section ? '-' + c.section : ''}`;
+                const count = c.students?.[0]?.count ?? 0;
+                return `
+                    <tr>
+                        <td style="font-weight: 500;">${label}</td>
+                        <td>${count}</td>
+                        <td>
+                            <button class="btn btn-primary" onclick="viewClass('${c.id}', '${label}')">View Students</button>
+                            <button class="btn" onclick="promoteClass('${c.id}', ${c.grade}, '${(c.section || '').replace(/'/g, "\\'")}')">Promote</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Opens the detail view for one class: hides the list, shows that class's
+        // students with today's date pre-filled, ready to mark attendance right here.
+        async function viewClass(classId, label) {
+            document.getElementById('classListView').style.display = 'none';
+            document.getElementById('classDetailView').style.display = 'block';
+            document.getElementById('classDetailView').dataset.classId = classId;
+            document.getElementById('classDetailTitle').textContent = label;
+            document.getElementById('classAttendanceDate').value = todayStr();
+
+            const students = await getStudentsForClass(classId);
+            renderAttendanceRows(students, 'classStudentsList');
+        }
+
+        function backToClassList() {
+            document.getElementById('classDetailView').style.display = 'none';
+            document.getElementById('classListView').style.display = 'block';
+        }
+
+        // "2026-2027" -> "2027-2028"
+        function nextAcademicYear(current) {
+            const parts = current.split('-').map(Number);
+            if (parts.length !== 2 || parts.some(isNaN)) return current;
+            return (parts[0] + 1) + '-' + (parts[1] + 1);
+        }
+
+        // Moves every student in one class to the next grade's class, and bumps
+        // their academic_year forward. Requires the target grade's class to
+        // already exist (same section) - won't auto-create one, since that could
+        // silently create a class with no teacher assigned.
+        async function promoteClass(classId, grade, section) {
+            if (grade >= 10) {
+                alert('Grade 10 is the highest grade in this school - these students are graduating, not being promoted to a new class.');
+                return;
+            }
+            const targetYear = nextAcademicYear(CURRENT_ACADEMIC_YEAR);
+            const targetGrade = grade + 1;
+
+            // .eq() doesn't reliably match NULL in PostgREST - a class with no
+            // section needs .is() instead, or promotion would silently fail to
+            // find its own target class.
+            let targetQuery = supabaseClient
+                .from('classes')
+                .select('id')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('grade', targetGrade);
+            targetQuery = section ? targetQuery.eq('section', section) : targetQuery.is('section', null);
+
+            const { data: targetClass, error: findError } = await targetQuery.maybeSingle();
+
+            if (findError || !targetClass) {
+                alert(`No Grade ${targetGrade}${section ? '-' + section : ''} class exists yet. Create it first, then promote.`);
+                return;
+            }
+
+            const confirmed = confirm(
+                `Promote all students from Grade ${grade}${section ? '-' + section : ''} (${CURRENT_ACADEMIC_YEAR}) ` +
+                `to Grade ${targetGrade}${section ? '-' + section : ''} (${targetYear})?\n\nThis updates their class and academic year for every student currently in this class. This cannot be undone from here.`
+            );
+            if (!confirmed) return;
+
+            const { data: updated, error } = await supabaseClient
+                .from('students')
+                .update({ class_id: targetClass.id, academic_year: targetYear })
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .select('id');
+
+            if (error) {
+                alert('Error promoting students: ' + error.message);
+                return;
+            }
+
+            alert(`Promoted ${updated.length} student(s) to Grade ${targetGrade}${section ? '-' + section : ''} (${targetYear}).`);
+            await loadClassesList();
+        }
+
+        async function saveClassAttendance() {
+            await saveAttendanceRows('classStudentsList', 'classAttendanceDate');
+        }
+
+        // ---- Attendance page (class-first) ----
+
+        // Fills the class dropdown at the top of the Attendance page.
+        async function populateAttendanceClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for attendance filter:', error);
+                return;
+            }
+
+            document.getElementById('attendanceClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+            document.getElementById('attendanceDate').value = todayStr();
+        }
+
+        // Runs when the class dropdown on the Attendance page changes.
+        async function loadAttendanceClassStudents() {
+            const classId = document.getElementById('attendanceClassFilter').value;
+            if (!classId) {
+                document.getElementById('attendanceMarkList').innerHTML = '<tr><td colspan="3" class="empty-state">Select a class above</td></tr>';
+                return;
+            }
+            const students = await getStudentsForClass(classId);
+            renderAttendanceRows(students, 'attendanceMarkList');
+        }
+
+        async function saveAttendancePageBulk() {
+            await saveAttendanceRows('attendanceMarkList', 'attendanceDate');
+        }
+
+        // ---- Timetable page ----
+
+        const DAYS = [
+            { num: 1, name: 'Monday' },
+            { num: 2, name: 'Tuesday' },
+            { num: 3, name: 'Wednesday' },
+            { num: 4, name: 'Thursday' },
+            { num: 5, name: 'Friday' }
+        ];
+        const PERIODS = 7;
+
+        // grade for each class, keyed by class id - filled once here, read by
+        // loadTimetableForClass() to decide "single class teacher" vs "full grid".
+        let classGradeCache = {};
+
+        async function populateTimetableClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for timetable filter:', error);
+                return;
+            }
+
+            classGradeCache = {};
+            (data || []).forEach(c => { classGradeCache[c.id] = c.grade; });
+
+            document.getElementById('timetableClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        // Builds the <option> list of staff for any teacher dropdown, reusing staffCache.
+        function staffOptionsHtml(selectedId) {
+            return '<option value="">Select teacher...</option>' + staffCache
+                .map(s => `<option value="${s.id}" ${s.id === selectedId ? 'selected' : ''}>${s.full_name}</option>`)
+                .join('');
+        }
+
+        async function loadTimetableForClass() {
+            const classId = document.getElementById('timetableClassFilter').value;
+            document.getElementById('classTeacherView').style.display = 'none';
+            document.getElementById('timetableGridView').style.display = 'none';
+            if (!classId) return;
+
+            const grade = classGradeCache[classId];
+            if (grade <= 3) {
+                document.getElementById('classTeacherView').style.display = 'block';
+                await loadClassTeacherView(classId);
+            } else {
+                document.getElementById('timetableGridView').style.display = 'block';
+                await loadTimetableGrid(classId);
+            }
+        }
+
+        // ---- Grades 1-3: single class teacher ----
+
+        async function loadClassTeacherView(classId) {
+            const { data, error } = await supabaseClient
+                .from('class_teachers')
+                .select('staff_id')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('is_class_teacher', true)
+                .maybeSingle();
+
+            if (error) {
+                console.error('Failed to load class teacher:', error);
+            }
+
+            document.getElementById('classTeacherView').dataset.classId = classId;
+            document.getElementById('classTeacherSelect').innerHTML = staffOptionsHtml(data?.staff_id);
+        }
+
+        async function saveClassTeacher() {
+            const classId = document.getElementById('classTeacherView').dataset.classId;
+            const staffId = document.getElementById('classTeacherSelect').value;
+            if (!staffId) return;
+
+            // Remove any existing class teacher for this class first, then insert
+            // the new one - class_teachers has no single-row-per-class constraint,
+            // so this delete+insert keeps it to exactly one class teacher.
+            const { error: deleteError } = await supabaseClient
+                .from('class_teachers')
+                .delete()
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('is_class_teacher', true);
+
+            if (deleteError) {
+                alert('Error updating class teacher: ' + deleteError.message);
+                return;
+            }
+
+            const { error: insertError } = await supabaseClient.from('class_teachers').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                staff_id: staffId,
+                subject: null,
+                is_class_teacher: true
+            });
+
+            if (insertError) {
+                alert('Error saving class teacher: ' + insertError.message);
+                return;
+            }
+            alert('Class teacher saved.');
+        }
+
+        // ---- Grade 4+: weekly period grid ----
+
+        async function loadTimetableGrid(classId) {
+            const { data, error } = await supabaseClient
+                .from('timetable')
+                .select('day_of_week, period_number, subject, staff_id')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            if (error) {
+                console.error('Failed to load timetable:', error);
+            }
+
+            // Key existing entries by "day-period" for quick lookup while building rows.
+            const existing = {};
+            (data || []).forEach(row => { existing[`${row.day_of_week}-${row.period_number}`] = row; });
+
+            let rows = '';
+            for (let period = 1; period <= PERIODS; period++) {
+                rows += `<tr><td style="font-weight: 500;">Period ${period}</td>`;
+                for (const day of DAYS) {
+                    const entry = existing[`${day.num}-${period}`];
+                    rows += `
+                        <td data-day="${day.num}" data-period="${period}" style="min-width: 160px;">
+                            <input type="text" placeholder="Subject" value="${entry?.subject || ''}"
+                                style="width: 100%; margin-bottom: 4px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;"
+                                onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
+                            <select style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;"
+                                onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
+                                ${staffOptionsHtml(entry?.staff_id)}
+                            </select>
+                        </td>
+                    `;
+                }
+                rows += '</tr>';
+            }
+            document.getElementById('timetableGridBody').innerHTML = rows;
+        }
+
+        async function saveTimetableCell(classId, day, period) {
+            const cell = document.querySelector(`#timetableGridBody td[data-day="${day}"][data-period="${period}"]`);
+            const subject = cell.querySelector('input').value.trim();
+            const staffId = cell.querySelector('select').value;
+
+            // Both empty - nothing to save, and clear any existing entry for this slot.
+            if (!subject && !staffId) {
+                await supabaseClient
+                    .from('timetable')
+                    .delete()
+                    .eq('school_id', CURRENT_SCHOOL_ID)
+                    .eq('class_id', classId)
+                    .eq('day_of_week', day)
+                    .eq('period_number', period)
+                    .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+                return;
+            }
+
+            if (!subject || !staffId) {
+                alert('Enter both a subject and a teacher for this period.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('timetable').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                staff_id: staffId,
+                subject: subject,
+                day_of_week: day,
+                period_number: period,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }, { onConflict: 'class_id,day_of_week,period_number,academic_year' });
+
+            if (error) {
+                // The staff-slot unique constraint (renamed to include academic_year)
+                // is what throws here if this teacher is already teaching another
+                // class at this same period this year.
+                if (error.message.includes('timetable_staff_slot_per_year_key')) {
+                    alert('This teacher is already assigned to another class at this same period. Pick a different teacher or period.');
+                } else {
+                    alert('Error saving timetable slot: ' + error.message);
+                }
+                await loadTimetableGrid(classId);
+                return;
+            }
+        }
+
+        // ---- Subjects page ----
+
+        /*
+            NEW: loadSubjects()
+            WHAT: fetches every subject for this school, PLUS who's assigned
+            to teach each one, and draws the whole table.
+            WHY we fetch subject_teachers as a nested "join" (see the
+            `subject_teachers(id, staff(full_name))` part below) instead of a
+            separate query: Supabase lets us ask for related rows from
+            another table in the SAME request, as long as there's a foreign
+            key connecting them (subject_teachers.subject_id -> subjects.id).
+            That's one trip to the database instead of two.
+        */
+        async function loadSubjects() {
+            // Only a Principal can create a subject (matches the database
+            // rule) - show/hide the creation form to match, so nobody sees a
+            // form that would just fail when they click Add.
+            document.getElementById('subjectCreateForm').style.display = CURRENT_STAFF_ROLE === 'Principal' ? 'block' : 'none';
+
+            const { data, error } = await supabaseClient
+                .from('subjects')
+                .select('id, name, code, subject_type, credit_hours, subject_teachers(id, staff_id, staff(full_name))')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('name', { ascending: true });
+
+            if (error) {
+                document.getElementById('subjectsList').innerHTML = `<tr><td colspan="6" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const subjects = data || [];
+            if (subjects.length === 0) {
+                document.getElementById('subjectsList').innerHTML = '<tr><td colspan="6" class="empty-state">No subjects added yet</td></tr>';
+                return;
+            }
+
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+
+            document.getElementById('subjectsList').innerHTML = subjects.map(s => {
+                // Each assigned teacher shows as a little "chip" with their
+                // name and a small × to remove them (Principal only). This
+                // turns subject_teachers rows into clickable HTML pieces.
+                const teacherChips = (s.subject_teachers || []).map(st => `
+                    <span style="display: inline-flex; align-items: center; gap: 4px; background: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 12px; font-size: 0.8rem; margin: 2px;">
+                        ${st.staff ? st.staff.full_name : 'Unknown'}
+                        ${isPrincipal ? `<button type="button" onclick="removeSubjectTeacher('${st.id}')" style="border: none; background: none; color: #0369a1; cursor: pointer; font-weight: 700; padding: 0;">&times;</button>` : ''}
+                    </span>
+                `).join('') || '<span style="color: var(--text-light);">None assigned</span>';
+
+                // The "+ assign" mini form only appears for a Principal -
+                // built from the same staffCache list used everywhere else
+                // in the app (Timetable, Classes) for teacher dropdowns.
+                const assignRow = isPrincipal ? `
+                    <div style="margin-top: 6px; display: flex; gap: 6px;">
+                        <select id="subjTeacherPick-${s.id}" style="padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem;">
+                            ${staffOptionsHtml()}
+                        </select>
+                        <button class="btn" style="padding: 4px 10px; font-size: 0.8rem;" onclick="assignSubjectTeacher('${s.id}')">Assign</button>
+                    </div>
+                ` : '';
+
+                return `
+                    <tr>
+                        <td style="font-weight: 500;">${s.name}</td>
+                        <td style="font-family: monospace;">${s.code}</td>
+                        <td>${s.subject_type}</td>
+                        <td>${s.credit_hours ?? 'N/A'}</td>
+                        <td>${teacherChips}${assignRow}</td>
+                        <td>${isPrincipal ? `<button class="btn" onclick="deleteSubject('${s.id}')">Delete</button>` : ''}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // NEW: creates one subject row. Principal-only per RLS - if somehow
+        // this got called by a non-Principal (shouldn't happen, since the
+        // form is hidden for them), the database itself would still refuse
+        // it, so nothing bad can actually happen either way.
+        async function handleCreateSubject() {
+            const name = document.getElementById('subjName').value.trim();
+            const code = document.getElementById('subjCode').value.trim();
+            const type = document.getElementById('subjType').value;
+            const creditHours = document.getElementById('subjCreditHours').value;
+
+            if (!name || !code) {
+                alert('Enter both a subject name and a code.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('subjects').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                name: name,
+                code: code,
+                subject_type: type,
+                credit_hours: creditHours === '' ? null : Number(creditHours)
+            });
+
+            if (error) {
+                alert('Error adding subject: ' + error.message);
+                return;
+            }
+
+            document.getElementById('subjName').value = '';
+            document.getElementById('subjCode').value = '';
+            document.getElementById('subjCreditHours').value = '';
+            await loadSubjects();
+        }
+
+        async function deleteSubject(subjectId) {
+            if (!confirm('Delete this subject? This also removes any teacher assignments to it.')) return;
+
+            const { error } = await supabaseClient.from('subjects').delete().eq('id', subjectId);
+            if (error) {
+                alert('Error deleting subject: ' + error.message);
+                return;
+            }
+            await loadSubjects();
+        }
+
+        // NEW: adds one row to subject_teachers - "this teacher is assigned
+        // to this subject". Doesn't touch Timetable at all - this is a
+        // separate roster, not a schedule.
+        async function assignSubjectTeacher(subjectId) {
+            const staffId = document.getElementById(`subjTeacherPick-${subjectId}`).value;
+            if (!staffId) {
+                alert('Pick a teacher first.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('subject_teachers').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                subject_id: subjectId,
+                staff_id: staffId,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            });
+
+            if (error) {
+                // Most likely cause: this teacher is already assigned to this
+                // subject (the unique constraint catches that), not a real bug.
+                alert('Could not assign teacher: ' + error.message);
+                return;
+            }
+            await loadSubjects();
+        }
+
+        async function removeSubjectTeacher(subjectTeacherId) {
+            const { error } = await supabaseClient.from('subject_teachers').delete().eq('id', subjectTeacherId);
+            if (error) {
+                alert('Error removing teacher: ' + error.message);
+                return;
+            }
+            await loadSubjects();
+        }
+
+        // ---- Curriculum page ----
+
+        let currentSyllabusId = null;
+
+        async function populateCurriculumFilters() {
+            const { data: classesData } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            document.getElementById('curClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (classesData || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            // Subjects come from the Subjects catalog we built earlier - not
+            // free text, so this list can never have "Math" and "Maths" as
+            // two separate accidental entries.
+            const { data: subjectsData } = await supabaseClient
+                .from('subjects')
+                .select('id, name')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('name', { ascending: true });
+
+            document.getElementById('curSubjectFilter').innerHTML =
+                '<option value="">Select a subject...</option>' +
+                (subjectsData || []).map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        }
+
+        /*
+            NEW: loadCurriculumForSelection()
+            WHAT: runs whenever the class OR subject dropdown changes. Looks
+            for an existing syllabus row matching BOTH choices - if one
+            exists, show the chapters/topics view; if not, show the "Start
+            Syllabus" button instead.
+        */
+        async function loadCurriculumForSelection() {
+            const classId = document.getElementById('curClassFilter').value;
+            const subjectId = document.getElementById('curSubjectFilter').value;
+            document.getElementById('curNoSyllabusView').style.display = 'none';
+            document.getElementById('curSyllabusView').style.display = 'none';
+            if (!classId || !subjectId) return;
+
+            const { data: syllabusRow } = await supabaseClient
+                .from('syllabus')
+                .select('id')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('subject_id', subjectId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .maybeSingle();
+
+            if (!syllabusRow) {
+                document.getElementById('curNoSyllabusView').style.display = 'block';
+                return;
+            }
+
+            currentSyllabusId = syllabusRow.id;
+            document.getElementById('curSyllabusView').style.display = 'block';
+            await loadChaptersAndTopics();
+        }
+
+        async function createSyllabus() {
+            const classId = document.getElementById('curClassFilter').value;
+            const subjectId = document.getElementById('curSubjectFilter').value;
+
+            const { error } = await supabaseClient.from('syllabus').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                subject_id: subjectId,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            });
+
+            if (error) {
+                alert('Error starting syllabus: ' + error.message);
+                return;
+            }
+            await loadCurriculumForSelection();
+        }
+
+        async function addChapter() {
+            const chapterNumber = document.getElementById('chapNumber').value;
+            const title = document.getElementById('chapTitle').value.trim();
+
+            if (!chapterNumber || !title) {
+                alert('Enter both a chapter number and a title.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('chapters').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                syllabus_id: currentSyllabusId,
+                chapter_number: Number(chapterNumber),
+                title: title
+            });
+
+            if (error) {
+                alert('Error adding chapter: ' + error.message);
+                return;
+            }
+
+            document.getElementById('chapNumber').value = '';
+            document.getElementById('chapTitle').value = '';
+            await loadChaptersAndTopics();
+        }
+
+        /*
+            NEW: loadChaptersAndTopics()
+            WHAT: the main "draw everything" function for this page. Fetches
+            every chapter for the current syllabus, and for EACH chapter,
+            also fetches its topics (a second query per chapter - simplest
+            way to keep the two levels straight, and at a school's scale
+            this is a small number of chapters, so it's not slow).
+            Then works out completion percentages: PER CHAPTER (how many of
+            its topics are checked off) and OVERALL (every topic across
+            every chapter combined) - and draws the progress bar at the top
+            of the page from that overall number.
+        */
+        async function loadChaptersAndTopics() {
+            const { data: chapters, error } = await supabaseClient
+                .from('chapters')
+                .select('id, chapter_number, title')
+                .eq('syllabus_id', currentSyllabusId)
+                .order('chapter_number', { ascending: true });
+
+            if (error || !chapters || chapters.length === 0) {
+                document.getElementById('chaptersContainer').innerHTML = '<div class="table-container empty-state">No chapters added yet</div>';
+                document.getElementById('curOverallSummary').textContent = 'No topics yet';
+                document.getElementById('curOverallBar').style.width = '0%';
+                return;
+            }
+
+            // Fetch each chapter's topics, all at once (Promise.all again -
+            // same "fire every request together, don't wait one by one" idea
+            // used elsewhere in this app).
+            const chaptersWithTopics = await Promise.all(chapters.map(async ch => {
+                const { data: topics } = await supabaseClient
+                    .from('topics')
+                    .select('id, title, is_completed, completed_date')
+                    .eq('chapter_id', ch.id)
+                    .order('created_at', { ascending: true });
+                return { ...ch, topics: topics || [] };
+            }));
+
+            // Overall completion: add up EVERY topic across ALL chapters.
+            let totalTopics = 0;
+            let totalCompleted = 0;
+            chaptersWithTopics.forEach(ch => {
+                totalTopics += ch.topics.length;
+                totalCompleted += ch.topics.filter(t => t.is_completed).length;
+            });
+            const overallPct = totalTopics > 0 ? Math.round((totalCompleted / totalTopics) * 100) : 0;
+            document.getElementById('curOverallSummary').textContent = `${totalCompleted} of ${totalTopics} topics completed (${overallPct}%)`;
+            document.getElementById('curOverallBar').style.width = overallPct + '%';
+
+            document.getElementById('chaptersContainer').innerHTML = chaptersWithTopics.map(ch => {
+                const chapterCompleted = ch.topics.filter(t => t.is_completed).length;
+                const chapterPct = ch.topics.length > 0 ? Math.round((chapterCompleted / ch.topics.length) * 100) : 0;
+
+                const topicRows = ch.topics.map(t => `
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-color);">
+                        <input type="checkbox" ${t.is_completed ? 'checked' : ''} onchange="toggleTopicComplete('${t.id}', this.checked)">
+                        <span style="flex: 1; ${t.is_completed ? 'text-decoration: line-through; color: var(--text-light);' : ''}">${t.title}</span>
+                        ${t.is_completed && t.completed_date ? `<small style="color: var(--text-light);">Done ${t.completed_date}</small>` : ''}
+                    </div>
+                `).join('') || '<p style="color: var(--text-light); font-size: 0.85rem;">No topics added yet</p>';
+
+                return `
+                    <div class="table-container" style="margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <h4 style="margin: 0;">Chapter ${ch.chapter_number}: ${ch.title}</h4>
+                            <span style="font-size: 0.85rem; color: var(--text-light);">${chapterPct}% done</span>
+                        </div>
+                        <div style="background: var(--border-color); border-radius: 6px; height: 8px; overflow: hidden; margin-bottom: 12px;">
+                            <div style="background: #0369a1; height: 100%; width: ${chapterPct}%;"></div>
+                        </div>
+                        ${topicRows}
+                        <div class="input-group" style="margin-top: 12px;">
+                            <input id="newTopic-${ch.id}" placeholder="New topic title">
+                            <button class="btn" onclick="addTopic('${ch.id}')"><i class="fas fa-plus"></i> Add Topic</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function addTopic(chapterId) {
+            const input = document.getElementById(`newTopic-${chapterId}`);
+            const title = input.value.trim();
+            if (!title) return;
+
+            const { error } = await supabaseClient.from('topics').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                chapter_id: chapterId,
+                title: title
+            });
+
+            if (error) {
+                alert('Error adding topic: ' + error.message);
+                return;
+            }
+            await loadChaptersAndTopics();
+        }
+
+        // NEW: ticking the checkbox is what actually records "completion
+        // tracking" - stamps today's date and who did it, or clears both if
+        // someone unchecks it by mistake.
+        async function toggleTopicComplete(topicId, isCompleted) {
+            const staffId = (await supabaseClient.auth.getUser()).data.user.id;
+
+            const { error } = await supabaseClient.from('topics').update({
+                is_completed: isCompleted,
+                completed_date: isCompleted ? todayStr() : null,
+                completed_by: isCompleted ? staffId : null
+            }).eq('id', topicId);
+
+            if (error) {
+                alert('Error updating topic: ' + error.message);
+                return;
+            }
+            await loadChaptersAndTopics();
+        }
+
+        // ---- Homework page ----
+
+        let currentHomeworkId = null;
+        let currentHomeworkClassId = null;
+
+        async function populateHomeworkClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for homework filter:', error);
+                return;
+            }
+
+            document.getElementById('homeworkClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadHomeworkForClass() {
+            const classId = document.getElementById('homeworkClassFilter').value;
+            document.getElementById('homeworkListView').style.display = 'none';
+            document.getElementById('homeworkSubmissionsView').style.display = 'none';
+            if (!classId) return;
+
+            document.getElementById('homeworkListView').style.display = 'block';
+            document.getElementById('homeworkListView').dataset.classId = classId;
+            currentHomeworkClassId = classId;
+
+            const { data, error } = await supabaseClient
+                .from('homework')
+                .select('id, title, subject, due_date')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .order('due_date', { ascending: false });
+
+            if (error) {
+                document.getElementById('homeworkList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const assignments = data || [];
+            if (assignments.length === 0) {
+                document.getElementById('homeworkList').innerHTML = '<tr><td colspan="4" class="empty-state">No homework yet - create one above</td></tr>';
+                return;
+            }
+
+            document.getElementById('homeworkList').innerHTML = assignments.map(hw => `
+                <tr>
+                    <td style="font-weight: 500;">${hw.title}</td>
+                    <td>${hw.subject || 'N/A'}</td>
+                    <td>${hw.due_date}</td>
+                    <td><button class="btn btn-primary" onclick="openHomeworkSubmissions('${hw.id}', '${hw.title.replace(/'/g, "\\'")}')">View Submissions</button></td>
+                </tr>
+            `).join('');
+        }
+
+        /*
+            NEW: handleCreateHomework()
+            WHAT: creates one homework row, and if a file was chosen, uploads
+            it as the assignment's attachment.
+            WHY the insert happens BEFORE the file upload: the file's storage
+            path needs the homework's own id in it (see teacher_management.sql
+            comment about the same trick for staff documents) - and we don't
+            have that id until AFTER the row exists. So: insert first, get the
+            id back, THEN upload using that id in the path.
+        */
+        async function handleCreateHomework() {
+            const classId = document.getElementById('homeworkListView').dataset.classId;
+            const title = document.getElementById('hwTitle').value.trim();
+            const subject = document.getElementById('hwSubject').value.trim();
+            const dueDate = document.getElementById('hwDueDate').value;
+            const totalMarks = document.getElementById('hwTotalMarks').value;
+            const description = document.getElementById('hwDescription').value.trim();
+            const file = document.getElementById('hwAttachment').files[0];
+
+            if (!title || !dueDate) {
+                alert('Enter a title and a due date.');
+                return;
+            }
+
+            const { data: inserted, error } = await supabaseClient.from('homework').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                staff_id: (await supabaseClient.auth.getUser()).data.user.id,
+                subject: subject || null,
+                title: title,
+                description: description || null,
+                due_date: dueDate,
+                total_marks: totalMarks === '' ? null : Number(totalMarks),
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }).select('id').single();
+
+            if (error) {
+                alert('Error creating assignment: ' + error.message);
+                return;
+            }
+
+            if (file) {
+                const path = `${CURRENT_SCHOOL_ID}/${inserted.id}/attachment_${file.name}`;
+                const { error: uploadError } = await supabaseClient.storage.from('homework-files').upload(path, file);
+                if (uploadError) {
+                    alert('Assignment created, but the attachment failed to upload: ' + uploadError.message);
+                } else {
+                    await supabaseClient.from('homework').update({ attachment_path: path }).eq('id', inserted.id);
+                }
+            }
+
+            document.getElementById('hwTitle').value = '';
+            document.getElementById('hwSubject').value = '';
+            document.getElementById('hwDueDate').value = '';
+            document.getElementById('hwTotalMarks').value = '';
+            document.getElementById('hwDescription').value = '';
+            document.getElementById('hwAttachment').value = '';
+
+            await loadHomeworkForClass();
+        }
+
+        function backToHomeworkList() {
+            document.getElementById('homeworkSubmissionsView').style.display = 'none';
+            document.getElementById('homeworkListView').style.display = 'block';
+        }
+
+        /*
+            NEW: openHomeworkSubmissions(homeworkId, title)
+            WHAT: shows one row per student in the class, each with:
+              - a Status dropdown (pending / submitted / late)
+              - a Marks box
+              - a Feedback box
+              - a small file picker, for attaching a scan/photo of that ONE
+                student's physical homework (this is what makes "student
+                submission" real in an app where students themselves never
+                log in - the TEACHER records it on their behalf, same as
+                Attendance).
+            Existing saved submissions are loaded and pre-filled; students
+            with no submission row yet just start blank (defaults to pending
+            when saved).
+        */
+        async function openHomeworkSubmissions(homeworkId, title) {
+            currentHomeworkId = homeworkId;
+            document.getElementById('homeworkListView').style.display = 'none';
+            document.getElementById('homeworkSubmissionsView').style.display = 'block';
+            document.getElementById('homeworkSubmissionsTitle').textContent = title;
+
+            const [studentsRes, submissionsRes] = await Promise.all([
+                getStudentsForClass(currentHomeworkClassId),
+                supabaseClient.from('homework_submissions').select('student_id, status, marks_obtained, feedback, submission_file_path').eq('homework_id', homeworkId)
+            ]);
+
+            const submissionsByStudent = {};
+            (submissionsRes.data || []).forEach(s => { submissionsByStudent[s.student_id] = s; });
+
+            document.getElementById('homeworkSubmissionsBody').innerHTML = studentsRes.map(s => {
+                const existing = submissionsByStudent[s.id] || {};
+                return `
+                    <tr data-student-id="${s.id}">
+                        <td style="font-weight: 500;">${s.full_name}</td>
+                        <td>
+                            <select data-field="status" style="padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px;">
+                                <option value="pending" ${(!existing.status || existing.status === 'pending') ? 'selected' : ''}>Pending</option>
+                                <option value="submitted" ${existing.status === 'submitted' ? 'selected' : ''}>Submitted</option>
+                                <option value="late" ${existing.status === 'late' ? 'selected' : ''}>Late</option>
+                            </select>
+                        </td>
+                        <td><input type="number" data-field="marks" value="${existing.marks_obtained ?? ''}" style="width: 70px; padding: 6px;"></td>
+                        <td><input type="text" data-field="feedback" value="${existing.feedback || ''}" placeholder="Feedback" style="width: 100%; padding: 6px;"></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Reads every row in the grid and upserts them all at once - exact
+        // same "loop over rows, build one array, one upsert call" pattern
+        // used by Attendance and Exams.
+        async function saveHomeworkSubmissions() {
+            const rows = document.querySelectorAll('#homeworkSubmissionsBody tr[data-student-id]');
+            const records = Array.from(rows).map(row => {
+                const marksValue = row.querySelector('[data-field="marks"]').value;
+                return {
+                    school_id: CURRENT_SCHOOL_ID,
+                    homework_id: currentHomeworkId,
+                    student_id: row.dataset.studentId,
+                    status: row.querySelector('[data-field="status"]').value,
+                    marks_obtained: marksValue === '' ? null : Number(marksValue),
+                    feedback: row.querySelector('[data-field="feedback"]').value.trim() || null
+                };
+            });
+
+            const { error } = await supabaseClient
+                .from('homework_submissions')
+                .upsert(records, { onConflict: 'homework_id,student_id' });
+
+            if (error) {
+                alert('Error saving submissions: ' + error.message);
+                return;
+            }
+            alert('Saved ' + records.length + ' submission(s).');
+        }
+
+        // ---- Announcements page ----
+
+        async function populateAnnouncementClassFilter() {
+            const { data } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            // Whole-school option only makes sense for a Principal (a Teacher
+            // posting an announcement can only target their own classes,
+            // matching the "announcements_insert_scoped" database rule).
+            const wholeSchoolOption = CURRENT_STAFF_ROLE === 'Principal'
+                ? '<option value="">Whole School</option>' : '';
+
+            document.getElementById('annClass').innerHTML =
+                wholeSchoolOption +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadAnnouncements() {
+            const { data, error } = await supabaseClient
+                .from('announcements')
+                .select('title, body, created_at, classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                document.getElementById('announcementsList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const announcements = data || [];
+            if (announcements.length === 0) {
+                document.getElementById('announcementsList').innerHTML = '<tr><td colspan="3" class="empty-state">No announcements yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('announcementsList').innerHTML = announcements.map(a => {
+                const forLabel = a.classes ? `Grade ${a.classes.grade}${a.classes.section ? '-' + a.classes.section : ''}` : 'Whole School';
+                return `
+                    <tr>
+                        <td style="font-weight: 500;">${a.title}<br><small style="color: var(--text-light); font-weight: 400;">${a.body}</small></td>
+                        <td>${forLabel}</td>
+                        <td>${new Date(a.created_at).toLocaleDateString()}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function handleCreateAnnouncement() {
+            const title = document.getElementById('annTitle').value.trim();
+            const body = document.getElementById('annBody').value.trim();
+            const classId = document.getElementById('annClass').value;
+
+            if (!title || !body) {
+                alert('Enter both a title and the announcement text.');
+                return;
+            }
+
+            const staffId = (await supabaseClient.auth.getUser()).data.user.id;
+
+            const { error } = await supabaseClient.from('announcements').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId || null,
+                title: title,
+                body: body,
+                posted_by: staffId
+            });
+
+            if (error) {
+                alert('Error posting announcement: ' + error.message);
+                return;
+            }
+
+            document.getElementById('annTitle').value = '';
+            document.getElementById('annBody').value = '';
+            await loadAnnouncements();
+        }
+
+        // ---- Messages page ----
+
+        async function populateMessageClassFilter() {
+            const { data } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            document.getElementById('msgClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadStudentsForMessages() {
+            const classId = document.getElementById('msgClassFilter').value;
+            document.getElementById('messageThread').innerHTML = '';
+            if (!classId) {
+                document.getElementById('msgStudentFilter').innerHTML = '<option value="">Select a class first</option>';
+                return;
+            }
+
+            const students = await getStudentsForClass(classId);
+            document.getElementById('msgStudentFilter').innerHTML =
+                '<option value="">Select a student...</option>' +
+                students.map(s => `<option value="${s.id}">${s.full_name}</option>`).join('');
+        }
+
+        async function loadMessageThread() {
+            const studentId = document.getElementById('msgStudentFilter').value;
+            if (!studentId) {
+                document.getElementById('messageThread').innerHTML = '';
+                return;
+            }
+
+            const { data, error } = await supabaseClient
+                .from('messages')
+                .select('sender_role, body, created_at')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('student_id', studentId)
+                .order('created_at', { ascending: true });
+
+            if (error) {
+                document.getElementById('messageThread').innerHTML = `<p style="color: #ef4444;">Error: ${error.message}</p>`;
+                return;
+            }
+
+            const messages = data || [];
+            if (messages.length === 0) {
+                document.getElementById('messageThread').innerHTML = '<p class="empty-state">No messages yet for this student</p>';
+                return;
+            }
+
+            // Parent messages align left, staff messages align right - a common,
+            // familiar chat-style layout so it's obvious at a glance who said what.
+            document.getElementById('messageThread').innerHTML = messages.map(m => `
+                <div style="display: flex; justify-content: ${m.sender_role === 'staff' ? 'flex-end' : 'flex-start'}; margin-bottom: 10px;">
+                    <div style="max-width: 70%; background: ${m.sender_role === 'staff' ? '#e0f2fe' : '#f1f5f9'}; padding: 10px 14px; border-radius: 10px;">
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-light); text-transform: capitalize;">${m.sender_role}</p>
+                        <p style="margin: 4px 0 0 0;">${m.body}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function sendStaffMessage() {
+            const studentId = document.getElementById('msgStudentFilter').value;
+            const body = document.getElementById('msgNewBody').value.trim();
+            if (!studentId || !body) {
+                alert('Select a student and type a message.');
+                return;
+            }
+
+            const staffId = (await supabaseClient.auth.getUser()).data.user.id;
+
+            const { error } = await supabaseClient.from('messages').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                student_id: studentId,
+                sender_role: 'staff',
+                sender_id: staffId,
+                body: body
+            });
+
+            if (error) {
+                alert('Error sending message: ' + error.message);
+                return;
+            }
+
+            document.getElementById('msgNewBody').value = '';
+            await loadMessageThread();
+        }
+
+        // ---- Exams page ----
+
+        let currentExamId = null;
+        let currentExamClassId = null;
+        let currentExamTerm = '';
+        // {subject: string, total: number} - built fresh each time an exam opens.
+        let examSubjectColumns = [];
+
+        async function populateExamClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for exams filter:', error);
+                return;
+            }
+
+            document.getElementById('examClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadExamsForClass() {
+            const classId = document.getElementById('examClassFilter').value;
+            document.getElementById('examListView').style.display = 'none';
+            document.getElementById('examMarksView').style.display = 'none';
+            if (!classId) return;
+
+            document.getElementById('examListView').style.display = 'block';
+            document.getElementById('examListView').dataset.classId = classId;
+
+            const { data, error } = await supabaseClient
+                .from('exams')
+                .select('id, name, term, academic_year')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                document.getElementById('examsList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const exams = data || [];
+            if (exams.length === 0) {
+                document.getElementById('examsList').innerHTML = '<tr><td colspan="4" class="empty-state">No exams yet - create one above</td></tr>';
+                return;
+            }
+
+            document.getElementById('examsList').innerHTML = exams.map(ex => `
+                <tr>
+                    <td style="font-weight: 500;">${ex.name}</td>
+                    <td>${ex.term}</td>
+                    <td>${ex.academic_year}</td>
+                    <td><button class="btn btn-primary" onclick="openExamMarks('${ex.id}', '${ex.name.replace(/'/g, "\\'")}', '${ex.term.replace(/'/g, "\\'")}')">Enter Marks</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function handleCreateExam() {
+            const classId = document.getElementById('examListView').dataset.classId;
+            const term = document.getElementById('newExamTerm').value;
+            const name = document.getElementById('newExamName').value.trim();
+            if (!name) {
+                alert('Enter an exam name, e.g. "Mid Term".');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('exams').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                name: name,
+                term: term,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            });
+
+            if (error) {
+                alert('Error creating exam: ' + error.message);
+                return;
+            }
+
+            document.getElementById('newExamName').value = '';
+            await loadExamsForClass();
+        }
+
+        function backToExamList() {
+            document.getElementById('examMarksView').style.display = 'none';
+            document.getElementById('examListView').style.display = 'block';
+        }
+
+        // Opens the marks grid for one exam: builds subject columns from whatever
+        // exam_results already exist, then any timetable subjects for that class
+        // (grade 4+) that aren't in there yet as empty starter columns. Grades
+        // 1-3 have no timetable subjects, so they start blank - use "Add Subject".
+        async function openExamMarks(examId, examName, examTerm) {
+            currentExamId = examId;
+            currentExamClassId = document.getElementById('examListView').dataset.classId;
+            currentExamTerm = examTerm;
+            document.getElementById('examListView').style.display = 'none';
+            document.getElementById('examMarksView').style.display = 'block';
+            document.getElementById('examMarksTitle').textContent = examName + ' (' + examTerm + ')';
+
+            const [resultsRes, timetableRes, studentsRes] = await Promise.all([
+                supabaseClient.from('exam_results').select('student_id, subject, marks_obtained, total_marks').eq('exam_id', examId),
+                supabaseClient.from('timetable').select('subject').eq('school_id', CURRENT_SCHOOL_ID).eq('class_id', currentExamClassId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                getStudentsForClass(currentExamClassId)
+            ]);
+
+            const existingResults = resultsRes.data || [];
+            const timetableSubjects = [...new Set((timetableRes.data || []).map(t => t.subject))];
+
+            examSubjectColumns = [];
+            const seen = new Set();
+            existingResults.forEach(r => {
+                if (!seen.has(r.subject)) {
+                    seen.add(r.subject);
+                    examSubjectColumns.push({ subject: r.subject, total: Number(r.total_marks) });
+                }
+            });
+            timetableSubjects.forEach(s => {
+                if (!seen.has(s)) {
+                    seen.add(s);
+                    examSubjectColumns.push({ subject: s, total: 100 });
+                }
+            });
+
+            renderExamMarksGrid(studentsRes, existingResults);
+        }
+
+        function addExamSubjectColumn() {
+            const name = document.getElementById('newSubjectName').value.trim();
+            const total = Number(document.getElementById('newSubjectTotal').value) || 100;
+            if (!name) {
+                alert('Enter a subject name.');
+                return;
+            }
+            if (examSubjectColumns.some(c => c.subject === name)) {
+                alert('That subject is already a column.');
+                return;
+            }
+            examSubjectColumns.push({ subject: name, total: total });
+            document.getElementById('newSubjectName').value = '';
+            // Re-render with whatever students/results are currently on screen -
+            // read back from the DOM rather than re-fetching, keeps unsaved entries.
+            rebuildGridPreservingInput();
+        }
+
+        // Rebuilds the grid's header/columns while keeping any marks already typed
+        // in, so adding a subject mid-entry doesn't wipe out unsaved work.
+        function rebuildGridPreservingInput() {
+            const rows = document.querySelectorAll('#examMarksBody tr[data-student-id]');
+            const studentsSnapshot = Array.from(rows).map(row => {
+                const marks = {};
+                // No slicing here - a brand-new column just added has no input in
+                // the DOM yet, but the "if (input && ...)" check below already
+                // handles that safely. Slicing off the last column unconditionally
+                // used to also skip a genuinely existing column when one was
+                // REMOVED instead of added, silently discarding its unsaved marks.
+                examSubjectColumns.forEach(col => {
+                    const input = row.querySelector(`input[data-subject="${col.subject}"]`);
+                    if (input && input.value !== '') marks[col.subject] = Number(input.value);
+                });
+                return { id: row.dataset.studentId, full_name: row.dataset.fullName, roll_number: row.dataset.rollNumber, marks };
+            });
+
+            renderExamMarksGrid(studentsSnapshot, [], studentsSnapshot);
+        }
+
+        // students: [{id, full_name, roll_number}]. existingResults (first load only):
+        // [{student_id, subject, marks_obtained}]. carriedMarks (rebuild only): each
+        // student object already carries a .marks map of subject->value.
+        function renderExamMarksGrid(students, existingResults, carriedStudents) {
+            const headerRow = document.getElementById('examMarksHeaderRow');
+            headerRow.innerHTML = '<th>Student</th>' + examSubjectColumns.map(col => `
+                <th>
+                    ${col.subject}<br>
+                    <small style="font-weight: 400;">/ <input type="number" value="${col.total}" style="width: 50px; padding: 2px 4px;" onchange="updateSubjectTotal('${col.subject}', this.value)"></small>
+                    <button type="button" class="no-print" style="border:none;background:none;color:#ef4444;cursor:pointer;" onclick="removeExamSubjectColumn('${col.subject}')" title="Remove column">&times;</button>
+                </th>
+            `).join('');
+
+            const resultsByStudent = {};
+            existingResults.forEach(r => {
+                resultsByStudent[r.student_id] = resultsByStudent[r.student_id] || {};
+                resultsByStudent[r.student_id][r.subject] = r.marks_obtained;
+            });
+
+            document.getElementById('examMarksBody').innerHTML = students.map(s => {
+                const marks = carriedStudents ? (s.marks || {}) : (resultsByStudent[s.id] || {});
+                const cells = examSubjectColumns.map(col => {
+                    const val = marks[col.subject];
+                    return `<td><input type="number" min="0" max="${col.total}" data-subject="${col.subject}" value="${val !== undefined ? val : ''}" style="width: 60px; padding: 6px;"></td>`;
+                }).join('');
+                return `<tr data-student-id="${s.id}" data-full-name="${s.full_name}" data-roll-number="${s.roll_number || ''}">
+                    <td style="font-weight: 500;">${s.full_name} <small style="color: var(--text-light);">(${s.roll_number || 'N/A'})</small></td>
+                    ${cells}
+                </tr>`;
+            }).join('');
+
+            renderReportCardLinks(students);
+        }
+
+        function updateSubjectTotal(subject, value) {
+            const col = examSubjectColumns.find(c => c.subject === subject);
+            if (col) col.total = Number(value) || 100;
+        }
+
+        function removeExamSubjectColumn(subject) {
+            examSubjectColumns = examSubjectColumns.filter(c => c.subject !== subject);
+            rebuildGridPreservingInput();
+        }
+
+        function renderReportCardLinks(students) {
+            document.getElementById('reportCardLinks').innerHTML = students.map(s => `
+                <tr>
+                    <td>${s.full_name}</td>
+                    <td><button class="btn" onclick="openReportCard('${s.id}', '${s.full_name.replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i> View / Print</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function saveExamMarks() {
+            const rows = document.querySelectorAll('#examMarksBody tr[data-student-id]');
+            const records = [];
+            rows.forEach(row => {
+                examSubjectColumns.forEach(col => {
+                    const input = row.querySelector(`input[data-subject="${col.subject}"]`);
+                    if (input && input.value !== '') {
+                        records.push({
+                            school_id: CURRENT_SCHOOL_ID,
+                            exam_id: currentExamId,
+                            student_id: row.dataset.studentId,
+                            subject: col.subject,
+                            marks_obtained: Number(input.value),
+                            total_marks: col.total
+                        });
+                    }
+                });
+            });
+
+            if (records.length === 0) {
+                alert('No marks entered yet.');
+                return;
+            }
+
+            const { error } = await supabaseClient
+                .from('exam_results')
+                .upsert(records, { onConflict: 'exam_id,student_id,subject' });
+
+            if (error) {
+                alert('Error saving marks: ' + error.message);
+                return;
+            }
+            alert('Saved ' + records.length + ' mark(s).');
+        }
+
+        // ---- Report card ----
+
+        function gradeFor(percentage) {
+            if (percentage >= 80) return 'A';
+            if (percentage >= 70) return 'B';
+            if (percentage >= 60) return 'C';
+            if (percentage >= 50) return 'D';
+            return 'F';
+        }
+
+        let currentReportCardStudentId = null;
+
+        async function openReportCard(studentId, studentName) {
+            currentReportCardStudentId = studentId;
+
+            const [resultsRes, attendanceRes, remarksRes] = await Promise.all([
+                supabaseClient.from('exam_results').select('subject, marks_obtained, total_marks').eq('exam_id', currentExamId).eq('student_id', studentId),
+                supabaseClient.from('attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('student_id', studentId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('exam_remarks').select('remarks').eq('exam_id', currentExamId).eq('student_id', studentId).maybeSingle()
+            ]);
+
+            const results = resultsRes.data || [];
+            if (results.length === 0) {
+                alert('No saved marks for this student yet - click "Save Marks" first.');
+                return;
+            }
+
+            const totalObtained = results.reduce((sum, r) => sum + Number(r.marks_obtained), 0);
+            const totalMax = results.reduce((sum, r) => sum + Number(r.total_marks), 0);
+            const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(1) : '0.0';
+
+            /*
+                =====================================================================
+                NEW: CLASS RANK - explained super simply, step by step.
+                =====================================================================
+
+                Goal: figure out where THIS student stands compared to their
+                classmates for THIS exam. Like a race - who came 1st, 2nd, 3rd...?
+
+                To do that, we can't just look at one student. We need to see
+                EVERYONE's marks for this exam, add up each person's total, and
+                then line everyone up from highest total to lowest total. Wherever
+                our student lands in that line-up IS their rank.
+
+                Step 1: Ask Supabase for every mark, for every student, for this
+                        one exam (currentExamId). Not just our one student this
+                        time - literally everybody who has marks saved for it.
+            */
+            const { data: allExamResults, error: rankError } = await supabaseClient
+                .from('exam_results')
+                .select('student_id, marks_obtained, total_marks')
+                .eq('exam_id', currentExamId);
+
+            let rankText = 'Not available';
+
+            // If something went wrong fetching the data, we just skip showing a
+            // rank instead of crashing the whole report card - the marks and
+            // grade above still matter more than the rank does.
+            if (!rankError && allExamResults) {
+                /*
+                    Step 2: We have a big flat list like:
+                        [ {student A, Math, 80/100}, {student A, English, 70/100},
+                          {student B, Math, 90/100}, {student B, English, 60/100}, ... ]
+
+                    We need to SQUASH this down into one total per student:
+                        student A -> 150 obtained out of 200
+                        student B -> 150 obtained out of 200
+
+                    A plain JavaScript object works like a set of labeled boxes -
+                    one box per student_id - where we keep adding numbers in as we
+                    go through the list, one row at a time.
+                */
+                const totalsByStudent = {};
+                allExamResults.forEach(r => {
+                    if (!totalsByStudent[r.student_id]) {
+                        totalsByStudent[r.student_id] = { obtained: 0, total: 0 };
+                    }
+                    totalsByStudent[r.student_id].obtained += Number(r.marks_obtained);
+                    totalsByStudent[r.student_id].total += Number(r.total_marks);
+                });
+
+                /*
+                    Step 3: Turn those "boxes" into one plain list of numbers - just
+                    each student's PERCENTAGE (not raw marks, since two students
+                    might not have marks saved for the exact same subjects yet -
+                    percentage is the fair way to compare everyone).
+
+                    Object.values(...) just means "give me all the boxes' contents
+                    as a list, ignore the labels" - we don't need to know WHOSE
+                    percentage is whose for this step, just the numbers themselves.
+                */
+                const allPercentages = Object.values(totalsByStudent).map(t =>
+                    t.total > 0 ? (t.obtained / t.total) * 100 : 0
+                );
+
+                /*
+                    Step 4: Sort that list from HIGHEST to LOWEST.
+                    (a, b) => b - a is the standard JavaScript way to say
+                    "biggest number first" instead of the default smallest-first.
+
+                    Now the list looks like: [95, 88, 75, 60, 40] for example -
+                    a straight-up leaderboard.
+                */
+                allPercentages.sort((a, b) => b - a);
+
+                /*
+                    Step 5: Find OUR student's percentage in that sorted
+                    leaderboard, and use its position as the rank.
+
+                    IMPORTANT gotcha: up above, "percentage" was rounded to 1
+                    decimal place for DISPLAY (e.g. "83.3"). But the numbers in
+                    our leaderboard are NOT rounded - computers keep way more
+                    decimal places internally (e.g. 83.33333333333334). If we
+                    compared the rounded display version against the unrounded
+                    leaderboard, they'd almost never match exactly, and we'd
+                    fail to find our own student in their own leaderboard!
+
+                    So here we redo the SAME unrounded math (obtained ÷ total)
+                    one more time, so both sides of the comparison are unrounded
+                    and actually match.
+
+                    indexOf() finds the first matching number and tells us WHERE
+                    in the list it is - but computers start counting positions
+                    from 0, not 1 (position 0 = 1st place, position 1 = 2nd place,
+                    etc). So we add +1 at the end to turn "computer counting" into
+                    "human counting" (1st, 2nd, 3rd...).
+                */
+                const myRawPercentage = totalMax > 0 ? (totalObtained / totalMax) * 100 : 0;
+                const position = allPercentages.indexOf(myRawPercentage);
+                const rank = position + 1;
+                const totalStudentsInExam = allPercentages.length;
+
+                rankText = `${rank} of ${totalStudentsInExam}`;
+            }
+
+            document.getElementById('rcRank').textContent = rankText;
+            // ===================== END of the new rank code =====================
+
+            // Attendance % for the year, independent of the exam itself.
+            const attendanceRecords = attendanceRes.data || [];
+            const presentCount = attendanceRecords.filter(a => a.status === 'present').length;
+            const attendancePct = attendanceRecords.length > 0
+                ? ((presentCount / attendanceRecords.length) * 100).toFixed(1) + '% (' + presentCount + '/' + attendanceRecords.length + ' days)'
+                : 'No attendance recorded yet';
+
+            document.getElementById('rcSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('rcExamName').textContent = document.getElementById('examMarksTitle').textContent + ' — ' + CURRENT_ACADEMIC_YEAR;
+            document.getElementById('rcStudentInfo').textContent = studentName;
+            document.getElementById('rcSubjectRows').innerHTML = results.map(r => `
+                <tr style="border-bottom: 1px solid #ddd;">
+                    <td style="padding: 8px;">${r.subject}</td>
+                    <td style="text-align: right; padding: 8px;">${r.marks_obtained}</td>
+                    <td style="text-align: right; padding: 8px;">${r.total_marks}</td>
+                </tr>
+            `).join('');
+            document.getElementById('rcTotalObtained').textContent = totalObtained;
+            document.getElementById('rcTotalMax').textContent = totalMax;
+            document.getElementById('rcPercentage').textContent = percentage;
+            document.getElementById('rcGrade').textContent = gradeFor(Number(percentage));
+            const passed = Number(percentage) >= PASSING_PERCENTAGE;
+            const passFailEl = document.getElementById('rcPassFail');
+            passFailEl.textContent = passed ? 'PASS' : 'FAIL';
+            passFailEl.style.color = passed ? '#166534' : '#991b1b';
+            document.getElementById('rcAttendance').textContent = attendancePct;
+            document.getElementById('rcRemarks').value = remarksRes.data?.remarks || '';
+
+            document.getElementById('reportCardOverlay').style.display = 'block';
+        }
+
+        async function saveReportCardRemarks() {
+            const remarks = document.getElementById('rcRemarks').value.trim();
+            const { error } = await supabaseClient.from('exam_remarks').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                exam_id: currentExamId,
+                student_id: currentReportCardStudentId,
+                remarks: remarks
+            }, { onConflict: 'exam_id,student_id' });
+
+            if (error) {
+                alert('Error saving remarks: ' + error.message);
+                return;
+            }
+            alert('Remarks saved.');
+        }
+
+        function closeReportCard() {
+            document.getElementById('reportCardOverlay').style.display = 'none';
+        }
+
+        // ---- Fees page (Principal-only via RLS - a Teacher will just see empty
+        // results here, not an error, since these queries return zero rows for them) ----
+
+        async function populateFeesClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for fees filter:', error);
+                return;
+            }
+
+            document.getElementById('feesClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            // Default the month picker to the current month, e.g. "2026-07"
+            const now = new Date();
+            document.getElementById('feeMonthPicker').value = now.toISOString().slice(0, 7);
+        }
+
+        async function loadFeesForClass() {
+            const classId = document.getElementById('feesClassFilter').value;
+            document.getElementById('feesClassView').style.display = classId ? 'block' : 'none';
+            document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="4" class="empty-state">Pick a month and click "View Invoices"</td></tr>';
+            if (!classId) return;
+
+            document.getElementById('feesClassView').dataset.classId = classId;
+
+            const { data } = await supabaseClient
+                .from('fee_structure')
+                .select('monthly_amount')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .maybeSingle();
+
+            document.getElementById('feeMonthlyAmount').value = data?.monthly_amount ?? '';
+        }
+
+        async function saveFeeStructure() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const amount = Number(document.getElementById('feeMonthlyAmount').value);
+            if (!amount || amount <= 0) {
+                alert('Enter a valid monthly fee amount.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('fee_structure').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                monthly_amount: amount,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }, { onConflict: 'class_id,academic_year' });
+
+            if (error) {
+                alert('Error saving fee amount: ' + error.message);
+                return;
+            }
+            alert('Monthly fee saved.');
+        }
+
+        // "2026-07" -> "July 2026"
+        function monthLabel(monthValue) {
+            const [year, month] = monthValue.split('-');
+            const date = new Date(Number(year), Number(month) - 1, 1);
+            return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+        }
+
+        async function generateFeeInvoices() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const monthValue = document.getElementById('feeMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data: structure } = await supabaseClient
+                .from('fee_structure')
+                .select('monthly_amount')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .maybeSingle();
+
+            if (!structure) {
+                alert('Set this class\'s monthly fee amount first, then generate invoices.');
+                return;
+            }
+
+            const students = await getStudentsForClass(classId);
+            if (students.length === 0) {
+                alert('No students in this class.');
+                return;
+            }
+
+            const records = students.map(s => ({
+                school_id: CURRENT_SCHOOL_ID,
+                student_id: s.id,
+                class_id: classId,
+                month: month,
+                amount_due: structure.monthly_amount,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }));
+
+            // ignoreDuplicates so re-clicking "Generate" for a month that already has
+            // invoices doesn't reset anyone already marked paid.
+            const { error } = await supabaseClient
+                .from('fee_invoices')
+                .upsert(records, { onConflict: 'student_id,month,academic_year', ignoreDuplicates: true });
+
+            if (error) {
+                alert('Error generating invoices: ' + error.message);
+                return;
+            }
+
+            alert(`Invoices ready for ${month} - ${students.length} student(s).`);
+            await loadFeeInvoices();
+        }
+
+        async function loadFeeInvoices() {
+            const classId = document.getElementById('feesClassView').dataset.classId;
+            const monthValue = document.getElementById('feeMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data, error } = await supabaseClient
+                .from('fee_invoices')
+                .select('id, amount_due, paid, students(id, full_name, roll_number)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('month', month)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            if (error) {
+                document.getElementById('feeInvoicesList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const invoices = data || [];
+            if (invoices.length === 0) {
+                document.getElementById('feeInvoicesList').innerHTML = '<tr><td colspan="4" class="empty-state">No invoices for this month yet - click "Generate Invoices"</td></tr>';
+                return;
+            }
+
+            document.getElementById('feeInvoicesList').innerHTML = invoices.map(inv => `
+                <tr data-invoice-id="${inv.id}" data-due="${inv.amount_due}" data-paid="${inv.paid}">
+                    <td style="font-weight: 500;">${inv.students.full_name}</td>
+                    <td>${inv.amount_due}</td>
+                    <td style="color: ${inv.paid ? '#166534' : '#991b1b'}; font-weight: 600;">${inv.paid ? 'Paid' : 'Unpaid'}</td>
+                    <td>
+                        ${inv.paid
+                            ? `<button class="btn" onclick="setInvoicePaidStatus('${inv.id}', false)">Mark Unpaid</button>`
+                            : `<button class="btn btn-primary" onclick="setInvoicePaidStatus('${inv.id}', true)">Mark Paid</button>`}
+                        <button class="btn" onclick="openFeeReceipt('${inv.id}', '${inv.students.full_name.replace(/'/g, "\\'")}', '${month}')">Receipt</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Toggles paid/unpaid - this IS the correction mechanism, no separate
+        // "undo" needed: mark unpaid again if a payment was recorded by mistake.
+        async function setInvoicePaidStatus(invoiceId, paid) {
+            const { error } = await supabaseClient
+                .from('fee_invoices')
+                .update({ paid: paid, paid_date: paid ? new Date().toISOString() : null })
+                .eq('id', invoiceId);
+
+            if (error) {
+                alert('Error updating status: ' + error.message);
+                return;
+            }
+            await loadFeeInvoices();
+        }
+
+        // School-wide (all classes) list of unpaid invoices for a picked month,
+        // so the Principal doesn't have to check class by class.
+        async function loadDefaulters() {
+            const monthValue = document.getElementById('defaultersMonthPicker').value;
+            if (!monthValue) {
+                alert('Pick a month first.');
+                return;
+            }
+            const month = monthLabel(monthValue);
+
+            const { data, error } = await supabaseClient
+                .from('fee_invoices')
+                .select('amount_due, students(full_name), classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('month', month)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .eq('paid', false);
+
+            if (error) {
+                document.getElementById('defaultersList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const defaulters = data || [];
+            if (defaulters.length === 0) {
+                document.getElementById('defaultersList').innerHTML = '<tr><td colspan="3" class="empty-state">No defaulters for this month - or invoices haven\'t been generated yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('defaultersList').innerHTML = defaulters.map(d => {
+                const classLabel = d.classes ? `Grade ${d.classes.grade}${d.classes.section ? '-' + d.classes.section : ''}` : 'N/A';
+                return `<tr><td>${d.students.full_name}</td><td>${classLabel}</td><td>${d.amount_due}</td></tr>`;
+            }).join('');
+        }
+
+        function openFeeReceipt(invoiceId, studentName, month) {
+            const row = document.querySelector(`tr[data-invoice-id="${invoiceId}"]`);
+            const due = row.dataset.due;
+            const paid = row.dataset.paid === 'true';
+
+            document.getElementById('frSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('frStudent').textContent = studentName;
+            document.getElementById('frMonth').textContent = month;
+            document.getElementById('frDue').textContent = due;
+            document.getElementById('frStatus').textContent = paid ? 'PAID' : 'UNPAID';
+
+            document.getElementById('feeReceiptOverlay').style.display = 'block';
+        }
+
+        function closeFeeReceipt() {
+            document.getElementById('feeReceiptOverlay').style.display = 'none';
+        }
+
+        // NEW (Step 3): loads attendance history and shows it in the table.
+        // select('date, status, students(full_name)') is a JOIN - it pulls the
+        // student's name from the students table using the student_id foreign key,
+        // so we can display "Ayesha Khan" instead of a raw student_id UUID.
+        async function loadAttendance() {
+            const { data, error } = await supabaseClient
+                .from('attendance')
+                .select('date, status, students(full_name)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .order('date', { ascending: false });
+
+            if (error) {
+                document.getElementById('attendanceList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const records = data || [];
+            if (records.length === 0) {
+                document.getElementById('attendanceList').innerHTML = '<tr><td colspan="3" class="empty-state">No attendance marked yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('attendanceList').innerHTML = records
+                .map(a => `
+                    <tr>
+                        <td style="font-weight: 500;">${a.students.full_name}</td>
+                        <td style="color: var(--text-light); font-family: monospace;">${a.date}</td>
+                        <td><span style="background: ${a.status === 'present' ? '#dcfce7' : '#fee2e2'}; color: ${a.status === 'present' ? '#166534' : '#991b1b'}; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; text-transform: capitalize;">${a.status}</span></td>
+                    </tr>
+                `).join('');
+        }
+
+        function showAddStudentForm() {
+            document.getElementById('addStudentForm').style.display = 'block';
+            document.getElementById('studentName').focus();
+        }
+
+        function hideAddStudentForm() {
+            document.getElementById('addStudentForm').style.display = 'none';
+            document.getElementById('studentName').value = '';
+            document.getElementById('studentRoll').value = '';
+            document.getElementById('studentClass').value = '';
+            document.getElementById('studentGuardianName').value = '';
+            document.getElementById('studentGuardianEmail').value = '';
+            document.getElementById('studentDob').value = '';
+            document.getElementById('studentPhoto').value = '';
+        }
+
+        // Uploads a student photo to the private student-photos bucket, path
+        // <school_id>/<student_id>.<ext>, then saves the storage PATH (not a
+        // public URL) on the student's photo_path column - a signed URL is
+        // generated fresh whenever the photo actually needs to be shown.
+        async function uploadStudentPhoto(studentId, file) {
+            const ext = file.name.split('.').pop();
+            const path = `${CURRENT_SCHOOL_ID}/${studentId}.${ext}`;
+
+            const { error: uploadError } = await supabaseClient.storage
+                .from('student-photos')
+                .upload(path, file, { upsert: true });
+
+            if (uploadError) {
+                alert('Photo upload failed: ' + uploadError.message);
+                return;
+            }
+
+            const { error: updateError } = await supabaseClient
+                .from('students')
+                .update({ photo_path: path })
+                .eq('id', studentId);
+
+            if (updateError) {
+                alert('Photo uploaded but failed to link to student: ' + updateError.message);
+            }
+        }
+
+        async function uploadPhotoForExistingStudent(inputEl, studentId) {
+            const file = inputEl.files[0];
+            if (!file) return;
+            await uploadStudentPhoto(studentId, file);
+            alert('Photo uploaded.');
+        }
+
+        // Builds the printable ID card, fetching a fresh signed URL for the photo
+        // each time since the bucket is private (no public URL stored).
+        async function openIdCard(studentId) {
+            const { data: s, error } = await supabaseClient
+                .from('students')
+                .select('full_name, roll_number, guardian_name, date_of_birth, photo_path, classes(grade, section)')
+                .eq('id', studentId)
+                .single();
+
+            if (error || !s) {
+                alert('Could not load student for ID card.');
+                return;
+            }
+
+            const classLabel = s.classes ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}` : 'N/A';
+
+            document.getElementById('idcSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('idcName').textContent = s.full_name;
+            document.getElementById('idcClass').textContent = classLabel;
+            document.getElementById('idcRoll').textContent = s.roll_number || 'N/A';
+            document.getElementById('idcGuardian').textContent = s.guardian_name || 'N/A';
+            document.getElementById('idcDob').textContent = s.date_of_birth || 'N/A';
+
+            const photoImg = document.getElementById('idcPhoto');
+            photoImg.style.display = 'none';
+            if (s.photo_path) {
+                const { data: signed } = await supabaseClient.storage
+                    .from('student-photos')
+                    .createSignedUrl(s.photo_path, 3600);
+                if (signed?.signedUrl) {
+                    photoImg.src = signed.signedUrl;
+                    photoImg.style.display = 'inline-block';
+                }
+            }
+
+            document.getElementById('idCardOverlay').style.display = 'block';
+        }
+
+        function closeIdCard() {
+            document.getElementById('idCardOverlay').style.display = 'none';
+        }
+
+        // ---- Student profile: attendance chart + exam performance chart ----
+
+        // Computes a whole-number age from a date_of_birth string, or null if
+        // no DOB is on file.
+        function calculateAge(dob) {
+            if (!dob) return null;
+            const birth = new Date(dob);
+            const today = new Date();
+            let age = today.getFullYear() - birth.getFullYear();
+            const monthDiff = today.getMonth() - birth.getMonth();
+            if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) age--;
+            return age;
+        }
+
+        let spAttendanceChartInstance = null;
+        let spGradesChartInstance = null;
+        // NEW: remembers which student's profile is currently open, so the
+        // "Link Parent" button (added further down) knows which student to
+        // connect the parent account to.
+        let currentStudentProfileId = null;
+
+        async function openStudentProfile(studentId) {
+            currentStudentProfileId = studentId;
+            const [studentRes, attendanceRes, resultsRes] = await Promise.all([
+                supabaseClient.from('students').select('full_name, roll_number, guardian_name, guardian_phone, guardian_email, date_of_birth, photo_path, classes(grade, section)').eq('id', studentId).single(),
+                supabaseClient.from('attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('student_id', studentId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('exam_results').select('marks_obtained, total_marks, exams(name, term)').eq('student_id', studentId)
+            ]);
+
+            if (studentRes.error || !studentRes.data) {
+                alert('Could not load this student - you may not have access to their class.');
+                return;
+            }
+            const s = studentRes.data;
+            const classLabel = s.classes ? `Grade ${s.classes.grade}${s.classes.section ? '-' + s.classes.section : ''}` : 'N/A';
+            const age = calculateAge(s.date_of_birth);
+
+            document.getElementById('spName').textContent = s.full_name;
+            document.getElementById('spDetails').textContent =
+                `${classLabel} · Roll No: ${s.roll_number || 'N/A'} · Age: ${age !== null ? age : 'N/A'} · DOB: ${s.date_of_birth || 'N/A'} · ` +
+                `Guardian: ${s.guardian_name || 'N/A'} · Phone: ${s.guardian_phone || 'N/A'} · Email: ${s.guardian_email || 'N/A'}`;
+
+            const photoImg = document.getElementById('spPhoto');
+            photoImg.style.display = 'none';
+            if (s.photo_path) {
+                const { data: signed } = await supabaseClient.storage.from('student-photos').createSignedUrl(s.photo_path, 3600);
+                if (signed?.signedUrl) {
+                    photoImg.src = signed.signedUrl;
+                    photoImg.style.display = 'inline-block';
+                }
+            }
+
+            // Attendance: present vs absent, whole year
+            const attendance = attendanceRes.data || [];
+            const presentCount = attendance.filter(a => a.status === 'present').length;
+            const absentCount = attendance.filter(a => a.status === 'absent').length;
+            const attPct = attendance.length > 0 ? ((presentCount / attendance.length) * 100).toFixed(1) : '0.0';
+            document.getElementById('spAttendanceSummary').textContent =
+                attendance.length > 0 ? `${attPct}% present (${presentCount} present, ${absentCount} absent, ${attendance.length} days total)` : 'No attendance recorded yet';
+
+            if (spAttendanceChartInstance) spAttendanceChartInstance.destroy();
+            spAttendanceChartInstance = new Chart(document.getElementById('spAttendanceChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Present', 'Absent'],
+                    datasets: [{ data: [presentCount, absentCount], backgroundColor: ['#166534', '#991b1b'] }]
+                },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // Grades: percentage per exam, grouped by exam name+term
+            const results = resultsRes.data || [];
+            const byExam = {};
+            results.forEach(r => {
+                const label = r.exams ? `${r.exams.name} (${r.exams.term})` : 'Exam';
+                byExam[label] = byExam[label] || { obtained: 0, total: 0 };
+                byExam[label].obtained += Number(r.marks_obtained);
+                byExam[label].total += Number(r.total_marks);
+            });
+            const examLabels = Object.keys(byExam);
+            const examPercentages = examLabels.map(l => byExam[l].total > 0 ? ((byExam[l].obtained / byExam[l].total) * 100).toFixed(1) : 0);
+
+            document.getElementById('spGradesSummary').textContent =
+                examLabels.length > 0 ? `${examLabels.length} exam(s) recorded` : 'No exam results recorded yet';
+
+            if (spGradesChartInstance) spGradesChartInstance.destroy();
+            spGradesChartInstance = new Chart(document.getElementById('spGradesChart'), {
+                type: 'bar',
+                data: {
+                    labels: examLabels,
+                    datasets: [{ label: 'Percentage', data: examPercentages, backgroundColor: '#4f46e5' }]
+                },
+                options: { scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } } }
+            });
+
+            // NEW: load which parent accounts are linked to this student, and
+            // hide the "link a parent" form for anyone who isn't a Principal.
+            document.getElementById('spParentLinkForm').style.display = CURRENT_STAFF_ROLE === 'Principal' ? 'flex' : 'none';
+            await loadLinkedParents(studentId);
+
+            document.getElementById('studentProfileOverlay').style.display = 'block';
+        }
+
+        function closeStudentProfile() {
+            document.getElementById('studentProfileOverlay').style.display = 'none';
+        }
+
+        // NEW: shows every parent account currently linked to this student,
+        // each with a small "Unlink" button (Principal only, same as the
+        // link form itself).
+        async function loadLinkedParents(studentId) {
+            const { data, error } = await supabaseClient
+                .from('parent_students')
+                .select('id, parents(full_name, phone)')
+                .eq('student_id', studentId);
+
+            const links = (error ? [] : data) || [];
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+
+            if (links.length === 0) {
+                document.getElementById('spParentsList').innerHTML = '<li style="color: var(--text-light); list-style: none; margin-left: -20px;">No parent account linked yet</li>';
+                return;
+            }
+
+            document.getElementById('spParentsList').innerHTML = links.map(l => `
+                <li>${l.parents ? l.parents.full_name : 'Unknown'} ${l.parents?.phone ? '(' + l.parents.phone + ')' : ''}
+                    ${isPrincipal ? `<button class="btn" style="padding: 2px 8px; font-size: 0.75rem; margin-left: 8px;" onclick="unlinkParent('${l.id}', '${studentId}')">Unlink</button>` : ''}
+                </li>
+            `).join('');
+        }
+
+        // NEW: connects an EXISTING parent account (already created as a
+        // Supabase Auth user + a row in the `parents` table) to this student.
+        // This does NOT create a new parent login - see the note in the
+        // response text about creating one first, same two-step process as
+        // adding a new teacher.
+        async function linkParentToStudent() {
+            const parentUuid = document.getElementById('spParentUuid').value.trim();
+            if (!parentUuid) {
+                alert('Enter the parent account UUID.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('parent_students').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                parent_id: parentUuid,
+                student_id: currentStudentProfileId
+            });
+
+            if (error) {
+                alert('Error linking parent: ' + error.message);
+                return;
+            }
+
+            document.getElementById('spParentUuid').value = '';
+            alert('Parent linked.');
+            await loadLinkedParents(currentStudentProfileId);
+        }
+
+        async function unlinkParent(linkId, studentId) {
+            const { error } = await supabaseClient.from('parent_students').delete().eq('id', linkId);
+            if (error) {
+                alert('Error unlinking parent: ' + error.message);
+                return;
+            }
+            await loadLinkedParents(studentId);
+        }
+
+        // ---- Staff profile: teaching load by class ----
+        // No staff attendance module exists yet, so this shows real data that
+        // does exist - how many periods/week they teach in each class, pulled
+        // from the Timetable (grade 4+) and their class-teacher assignment
+        // (grade 1-3, shown as a full day rather than a period count).
+
+        let stfLoadChartInstance = null;
+        let stfAttendanceChartInstance = null;
+        let currentStaffProfileId = null;
+
+        /*
+            NEW: applyRoleBasedEditing()
+            WHAT: locks (or unlocks) the Professional Info and Emergency Contact
+            boxes, depending on who's looking at this profile.
+            WHY as its own small function instead of copy-pasting this logic
+            twice: both sections follow the EXACT same rule ("only a Principal
+            can type in these boxes"), so writing the rule once and calling it
+            for both is less code to maintain, and if the rule ever changes we
+            only fix it in one place.
+            The actual SECURITY still lives in the database (RLS) - this is
+            just about not showing someone a box that would fail anyway if
+            they tried to use it. A locked box here is a courtesy, not the
+            real lock.
+        */
+        function applyRoleBasedEditing() {
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+            const lockedIds = ['stfQualifications', 'stfExperience', 'stfSalary', 'stfEmergencyName', 'stfEmergencyPhone', 'stfEmergencyRelation'];
+            lockedIds.forEach(id => {
+                document.getElementById(id).disabled = !isPrincipal;
+            });
+            document.getElementById('stfProfessionalSaveBtn').style.display = isPrincipal ? 'inline-flex' : 'none';
+            document.getElementById('stfEmergencySaveBtn').style.display = isPrincipal ? 'inline-flex' : 'none';
+            // Documents: Principal-only per staff_documents RLS - hide the
+            // upload row entirely for anyone else, rather than showing an
+            // upload box that would just fail.
+            document.getElementById('stfDocumentUploadRow').style.display = isPrincipal ? 'flex' : 'none';
+        }
+
+        async function openStaffProfile(staffId) {
+            currentStaffProfileId = staffId;
+
+            // One big batch of requests, all fired at once (Promise.all) instead
+            // of one after another - this is just faster, since the browser
+            // doesn't have to wait for request #1 to finish before starting #2.
+            const [staffRes, timetableRes, classTeacherRes, attendanceRes, documentsRes] = await Promise.all([
+                supabaseClient.from('staff').select('full_name, role, phone, email, date_of_birth, qualifications, experience, salary, emergency_contact_name, emergency_contact_phone, emergency_contact_relation').eq('id', staffId).single(),
+                supabaseClient.from('timetable').select('class_id, subject, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('class_teachers').select('class_id, classes(grade, section)').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('is_class_teacher', true),
+                supabaseClient.from('staff_attendance').select('status').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).eq('academic_year', CURRENT_ACADEMIC_YEAR),
+                supabaseClient.from('staff_documents').select('id, document_name, file_path, uploaded_at').eq('school_id', CURRENT_SCHOOL_ID).eq('staff_id', staffId).order('uploaded_at', { ascending: false })
+            ]);
+
+            if (staffRes.error || !staffRes.data) {
+                alert('Could not load this staff member - you may not have access.');
+                return;
+            }
+
+            const stf = staffRes.data;
+            document.getElementById('stfName').textContent = stf.full_name;
+            document.getElementById('stfRole').textContent = stf.role || 'Staff';
+            document.getElementById('stfPhone').value = stf.phone || '';
+            document.getElementById('stfEmail').value = stf.email || '';
+            document.getElementById('stfDob').value = stf.date_of_birth || '';
+            const age = calculateAge(stf.date_of_birth);
+            document.getElementById('stfAge').textContent = age !== null ? `Age: ${age}` : '';
+
+            // NEW: Professional Info + Emergency Contact - just pour the saved
+            // values into their boxes, same idea as Contact Info above.
+            document.getElementById('stfQualifications').value = stf.qualifications || '';
+            document.getElementById('stfExperience').value = stf.experience || '';
+            document.getElementById('stfSalary').value = stf.salary ?? '';
+            document.getElementById('stfEmergencyName').value = stf.emergency_contact_name || '';
+            document.getElementById('stfEmergencyPhone').value = stf.emergency_contact_phone || '';
+            document.getElementById('stfEmergencyRelation').value = stf.emergency_contact_relation || '';
+
+            // Lock the boxes above if this viewer isn't a Principal - see the
+            // big comment on applyRoleBasedEditing() for why.
+            applyRoleBasedEditing();
+
+            const periodRows = timetableRes.data || [];
+            const classTeacherRows = classTeacherRes.data || [];
+
+            // NEW: Subjects Assigned - just the UNIQUE subject names from the
+            // timetable rows we already fetched. Set (like a bag that
+            // automatically throws away duplicates) is the easiest way to turn
+            // "Math, Math, Science, Math, English" into "Math, Science, English".
+            const uniqueSubjects = [...new Set(periodRows.map(r => r.subject))];
+            document.getElementById('stfSubjectsList').textContent =
+                uniqueSubjects.length > 0 ? uniqueSubjects.join(', ') : 'No subjects assigned yet (via Timetable)';
+
+            const loadByClass = {};
+            periodRows.forEach(r => {
+                const label = r.classes ? `Grade ${r.classes.grade}${r.classes.section ? '-' + r.classes.section : ''}` : 'Class';
+                loadByClass[label] = (loadByClass[label] || 0) + 1;
+            });
+            // Class-teacher assignments (grades 1-3) don't have periods - shown
+            // as a flat "5 days/week" bar so they still appear on the chart.
+            classTeacherRows.forEach(r => {
+                const label = r.classes ? `Grade ${r.classes.grade}${r.classes.section ? '-' + r.classes.section : ''} (Class Teacher)` : 'Class Teacher';
+                loadByClass[label] = 5;
+            });
+
+            const labels = Object.keys(loadByClass);
+            document.getElementById('stfLoadSummary').textContent =
+                labels.length > 0 ? `Teaching ${labels.length} class(es)` : 'Not currently assigned to any class or timetable slot';
+
+            if (stfLoadChartInstance) stfLoadChartInstance.destroy();
+            stfLoadChartInstance = new Chart(document.getElementById('stfLoadChart'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'Periods/week', data: Object.values(loadByClass), backgroundColor: '#0369a1' }]
+                },
+                options: { indexAxis: 'y', scales: { x: { beginAtZero: true } }, plugins: { legend: { display: false } } }
+            });
+
+            // NEW: Staff Attendance chart - present vs absent, same doughnut
+            // style as the student profile's attendance chart, so the app
+            // stays visually consistent.
+            const attRows = attendanceRes.data || [];
+            const presentCount = attRows.filter(a => a.status === 'present').length;
+            const absentCount = attRows.filter(a => a.status === 'absent').length;
+            document.getElementById('stfAttendanceSummary').textContent =
+                attRows.length > 0 ? `${presentCount} present, ${absentCount} absent (${attRows.length} days recorded)` : 'No attendance recorded yet';
+
+            if (stfAttendanceChartInstance) stfAttendanceChartInstance.destroy();
+            stfAttendanceChartInstance = new Chart(document.getElementById('stfAttendanceChart'), {
+                type: 'doughnut',
+                data: { labels: ['Present', 'Absent'], datasets: [{ data: [presentCount, absentCount], backgroundColor: ['#166534', '#991b1b'] }] },
+                options: { plugins: { legend: { position: 'bottom' } } }
+            });
+
+            // NEW: Documents list - Principal-only per RLS, so a Teacher will
+            // just get an empty list back here (not an error).
+            const documents = documentsRes.data || [];
+            renderStaffDocumentsList(documents);
+
+            document.getElementById('staffProfileOverlay').style.display = 'block';
+        }
+
+        function closeStaffProfile() {
+            document.getElementById('staffProfileOverlay').style.display = 'none';
+        }
+
+        // Principal-only in practice - RLS (staff_update_principal_only) will
+        // reject this for a Teacher trying to edit someone else's info, or even
+        // their own, since staff self-editing wasn't part of that policy.
+        async function saveStaffContactInfo() {
+            const phone = document.getElementById('stfPhone').value.trim();
+            const email = document.getElementById('stfEmail').value.trim();
+            const dob = document.getElementById('stfDob').value;
+
+            const { error } = await supabaseClient
+                .from('staff')
+                .update({ phone: phone || null, email: email || null, date_of_birth: dob || null })
+                .eq('id', currentStaffProfileId);
+
+            if (error) {
+                alert('Error saving contact info: ' + error.message);
+                return;
+            }
+
+            const age = calculateAge(dob);
+            document.getElementById('stfAge').textContent = age !== null ? `Age: ${age}` : '';
+            alert('Contact info saved.');
+        }
+
+        // NEW: saves Qualifications + Experience + Salary in one go - Principal
+        // only (same database rule as saveStaffContactInfo above).
+        async function saveStaffProfessionalInfo() {
+            const qualifications = document.getElementById('stfQualifications').value.trim();
+            const experience = document.getElementById('stfExperience').value.trim();
+            const salaryValue = document.getElementById('stfSalary').value;
+
+            const { error } = await supabaseClient
+                .from('staff')
+                .update({
+                    qualifications: qualifications || null,
+                    experience: experience || null,
+                    salary: salaryValue === '' ? null : Number(salaryValue)
+                })
+                .eq('id', currentStaffProfileId);
+
+            if (error) {
+                alert('Error saving professional info: ' + error.message);
+                return;
+            }
+            alert('Professional info saved.');
+        }
+
+        // NEW: saves the emergency contact's name/phone/relation.
+        async function saveStaffEmergencyContact() {
+            const name = document.getElementById('stfEmergencyName').value.trim();
+            const phone = document.getElementById('stfEmergencyPhone').value.trim();
+            const relation = document.getElementById('stfEmergencyRelation').value.trim();
+
+            const { error } = await supabaseClient
+                .from('staff')
+                .update({
+                    emergency_contact_name: name || null,
+                    emergency_contact_phone: phone || null,
+                    emergency_contact_relation: relation || null
+                })
+                .eq('id', currentStaffProfileId);
+
+            if (error) {
+                alert('Error saving emergency contact: ' + error.message);
+                return;
+            }
+            alert('Emergency contact saved.');
+        }
+
+        /*
+            NEW: markStaffAttendance(status)
+            WHAT: writes (or overwrites) TODAY's attendance row for whichever
+            staff profile is currently open.
+            WHY "upsert" instead of plain insert: if someone accidentally
+            clicks "Mark Absent" and then realizes they meant "Mark Present",
+            clicking the other button should just CORRECT today's row, not
+            create a second, conflicting one. The unique(staff_id, date) rule
+            we added in the database is what makes upsert smart enough to
+            update the existing row instead of erroring out.
+        */
+        async function markStaffAttendance(status) {
+            const { error } = await supabaseClient.from('staff_attendance').upsert({
+                school_id: CURRENT_SCHOOL_ID,
+                staff_id: currentStaffProfileId,
+                date: todayStr(),
+                status: status,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }, { onConflict: 'staff_id,date' });
+
+            if (error) {
+                alert('Error marking attendance: ' + error.message);
+                return;
+            }
+
+            alert(`Marked ${status} for today.`);
+            await openStaffProfile(currentStaffProfileId); // refresh the chart with the new data
+        }
+
+        // NEW: turns the list of document rows into the table you see on
+        // screen. Its own function (instead of inline) because we call it
+        // from two places: right after loading the profile, and again right
+        // after a new upload finishes.
+        function renderStaffDocumentsList(documents) {
+            if (documents.length === 0) {
+                document.getElementById('stfDocumentsList').innerHTML = '<tr><td colspan="3" class="empty-state">No documents uploaded</td></tr>';
+                return;
+            }
+            document.getElementById('stfDocumentsList').innerHTML = documents.map(d => `
+                <tr>
+                    <td>${d.document_name}</td>
+                    <td>${new Date(d.uploaded_at).toLocaleDateString()}</td>
+                    <td><button class="btn" onclick="downloadStaffDocument('${d.file_path}', '${d.document_name.replace(/'/g, "\\'")}')">Download</button></td>
+                </tr>
+            `).join('');
+        }
+
+        // NEW: uploads a file to the private staff-documents bucket, then
+        // saves a row describing it (name + where it lives) in the database.
+        // Two separate steps because Storage (the file itself) and the
+        // database (info ABOUT the file) are two different systems in
+        // Supabase - the file's bytes live in Storage, everything else about
+        // it lives in a normal table.
+        async function uploadStaffDocument() {
+            const docName = document.getElementById('stfDocumentName').value.trim();
+            const file = document.getElementById('stfDocumentFile').files[0];
+
+            if (!docName || !file) {
+                alert('Enter a document name and choose a file.');
+                return;
+            }
+
+            // Path includes a timestamp so uploading two files with the same
+            // name doesn't overwrite one another by accident.
+            const path = `${CURRENT_SCHOOL_ID}/${currentStaffProfileId}/${Date.now()}_${file.name}`;
+
+            const { error: uploadError } = await supabaseClient.storage
+                .from('staff-documents')
+                .upload(path, file);
+
+            if (uploadError) {
+                alert('Upload failed: ' + uploadError.message);
+                return;
+            }
+
+            const { error: insertError } = await supabaseClient.from('staff_documents').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                staff_id: currentStaffProfileId,
+                document_name: docName,
+                file_path: path
+            });
+
+            if (insertError) {
+                alert('File uploaded but failed to save its record: ' + insertError.message);
+                return;
+            }
+
+            document.getElementById('stfDocumentName').value = '';
+            document.getElementById('stfDocumentFile').value = '';
+
+            const { data: documents } = await supabaseClient
+                .from('staff_documents')
+                .select('id, document_name, file_path, uploaded_at')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('staff_id', currentStaffProfileId)
+                .order('uploaded_at', { ascending: false });
+
+            renderStaffDocumentsList(documents || []);
+            alert('Document uploaded.');
+        }
+
+        // NEW: the bucket is private, so we can't just link straight to the
+        // file - we ask Supabase for a temporary "signed URL" (a link that
+        // works for a little while, then stops working) and open that instead.
+        async function downloadStaffDocument(filePath, docName) {
+            const { data: signed, error } = await supabaseClient.storage
+                .from('staff-documents')
+                .createSignedUrl(filePath, 3600);
+
+            if (error || !signed?.signedUrl) {
+                alert('Could not open this document: ' + (error?.message || 'unknown error'));
+                return;
+            }
+
+            window.open(signed.signedUrl, '_blank');
+        }
+
+        async function handleAddStudent() {
+            const name = document.getElementById('studentName').value.trim();
+            const roll = document.getElementById('studentRoll').value.trim();
+            // NEW (Step 4): this now reads a real classes.id from the dropdown,
+            // not free text - it gets saved into the new class_id column.
+            const classId = document.getElementById('studentClass').value;
+            const guardianName = document.getElementById('studentGuardianName').value.trim();
+            const guardianEmail = document.getElementById('studentGuardianEmail').value.trim();
+            const dob = document.getElementById('studentDob').value;
+            const photoFile = document.getElementById('studentPhoto').files[0];
+
+            if (!name || !roll) {
+                alert('Please fill in all required fields');
+                return;
+            }
+
+            const { data: inserted, error } = await supabaseClient.from('students').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                full_name: name,
+                roll_number: roll,
+                class_id: classId || null,
+                guardian_name: guardianName || null,
+                guardian_email: guardianEmail || null,
+                date_of_birth: dob || null,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }).select('id').single();
+
+            if (error) {
+                alert('Error adding student: ' + error.message);
+                return;
+            }
+
+            if (photoFile) {
+                await uploadStudentPhoto(inserted.id, photoFile);
+            }
+
+            hideAddStudentForm();
+            await loadStudents();
+        }
+
+        /*
+            =====================================================================
+            NEW: handleAdmission() - runs when someone clicks "Submit Admission"
+            on the new Admission page.
+
+            WHAT this does, in plain steps:
+              1. Read every box the person typed into (there are a lot of them!).
+              2. Check that the REQUIRED ones (marked with * on the page) aren't
+                 empty. If any are missing, stop and tell the person which kind
+                 of info is missing - don't just silently fail.
+              3. Send ONE insert to Supabase with everything at once, creating
+                 a real row in the same "students" table used everywhere else
+                 in the app.
+              4. If a photo was chosen, upload it (reusing uploadStudentPhoto,
+                 the same function the Students page already uses - no need to
+                 write photo-uploading code twice).
+              5. Show a success message and empty out every box, so the form is
+                 ready for the NEXT new admission without any leftover text.
+
+            WHY it's a separate function from handleAddStudent(), even though
+            both of them end with "insert a student row": this form collects
+            8 MORE pieces of information (father's name, address, CNIC, etc.)
+            that the quick Add Student form doesn't ask for. Keeping them
+            separate means the quick form stays quick, and this one can be as
+            thorough as a real admission needs to be.
+            =====================================================================
+        */
+        async function handleAdmission() {
+            // Step 1: read every box. .trim() removes accidental extra spaces
+            // someone might type at the start/end (like " Ali " becoming "Ali").
+            const fullName = document.getElementById('admFullName').value.trim();
+            const roll = document.getElementById('admRoll').value.trim();
+            const classId = document.getElementById('admClass').value;
+            const dob = document.getElementById('admDob').value;
+            const gender = document.getElementById('admGender').value;
+            const admissionDate = document.getElementById('admAdmissionDate').value;
+            const previousSchool = document.getElementById('admPreviousSchool').value.trim();
+            const photoFile = document.getElementById('admPhoto').files[0];
+
+            const fatherName = document.getElementById('admFatherName').value.trim();
+            const motherName = document.getElementById('admMotherName').value.trim();
+            const guardianName = document.getElementById('admGuardianName').value.trim();
+            const guardianCnic = document.getElementById('admGuardianCnic').value.trim();
+            const guardianOccupation = document.getElementById('admGuardianOccupation').value.trim();
+            const guardianPhone = document.getElementById('admGuardianPhone').value.trim();
+            const guardianEmail = document.getElementById('admGuardianEmail').value.trim();
+            const address = document.getElementById('admAddress').value.trim();
+
+            // Step 2: check the REQUIRED ones. We build a list of what's
+            // missing (instead of stopping at the very first problem) so the
+            // person sees everything they still need to fill in, in one go,
+            // rather than fixing one box, clicking submit, finding the NEXT
+            // missing box, fixing that, clicking submit again...
+            const missing = [];
+            if (!fullName) missing.push('Full name');
+            if (!roll) missing.push('Roll number');
+            if (!classId) missing.push('Class');
+            if (!dob) missing.push('Date of birth');
+            if (!gender) missing.push('Gender');
+            if (!admissionDate) missing.push('Admission date');
+            if (!fatherName) missing.push("Father's name");
+            if (!guardianPhone) missing.push('Guardian phone');
+            if (!address) missing.push('Home address');
+
+            if (missing.length > 0) {
+                alert('Please fill in these required fields:\n\n' + missing.join('\n'));
+                return;
+            }
+
+            // Step 3: one insert, everything at once. If a box was left empty
+            // and it's NOT required (like Mother's Name), we save it as null
+            // instead of an empty string - null cleanly means "not provided",
+            // an empty string is messier to tell apart from "provided nothing".
+            const { data: inserted, error } = await supabaseClient.from('students').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                full_name: fullName,
+                roll_number: roll,
+                class_id: classId,
+                date_of_birth: dob,
+                gender: gender,
+                admission_date: admissionDate,
+                previous_school: previousSchool || null,
+                father_name: fatherName,
+                mother_name: motherName || null,
+                guardian_name: guardianName || fatherName,
+                guardian_cnic: guardianCnic || null,
+                guardian_occupation: guardianOccupation || null,
+                guardian_phone: guardianPhone,
+                guardian_email: guardianEmail || null,
+                address: address,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }).select('id').single();
+
+            if (error) {
+                alert('Error submitting admission: ' + error.message);
+                return;
+            }
+
+            // Step 4: photo, if one was chosen. Same helper function the
+            // Students page already uses - see uploadStudentPhoto() above.
+            if (photoFile) {
+                await uploadStudentPhoto(inserted.id, photoFile);
+            }
+
+            // Step 5: success message, then clear every box for the next admission.
+            alert(fullName + ' has been admitted successfully.');
+            document.querySelectorAll('#admission input').forEach(input => { input.value = ''; });
+            document.getElementById('admGender').value = '';
+            document.getElementById('admAdmissionDate').value = todayStr();
+
+            await loadStudents();
+            await loadClassesList();
+        }
+
+        function showPage(pageId) {
+            const pages = document.querySelectorAll('.page');
+            pages.forEach(page => page.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+
+            const navLinks = document.querySelectorAll('.nav-link');
+            navLinks.forEach(link => link.classList.remove('active'));
+            event.target.closest('.nav-link').classList.add('active');
+
+            const titles = {
+                'dashboard': 'Dashboard',
+                'students': 'Student Management',
+                'staff': 'Staff Directory',
+                'admission': 'New Admission',
+                'classes': 'Classes',
+                'timetable': 'Timetable',
+                'subjects': 'Subjects',
+                'curriculum': 'Curriculum',
+                'homework': 'Homework',
+                'announcements': 'Announcements',
+                'messages': 'Messages',
+                'exams': 'Exams',
+                'fees': 'Fees',
+                'attendance': 'Attendance'
+            };
+            document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';
+        }
+
+        checkSession();

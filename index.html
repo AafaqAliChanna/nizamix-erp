@@ -539,6 +539,24 @@
                         <span>Timetable</span>
                     </button>
                 </li>
+                <!--
+                    NEW: Subjects nav link.
+                    WHAT: opens a page listing the school's actual list of
+                    subjects (Math, Science, English...) with a code, whether
+                    it's Theory/Practical/Both, credit hours, and which
+                    teachers are assigned to it.
+                    WHY this is separate from Timetable: Timetable answers
+                    "who teaches WHAT class WHEN", this page answers "what
+                    subjects does the school offer AT ALL, and who's
+                    qualified/responsible for each one" - a curriculum list,
+                    not a schedule.
+                -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('subjects')">
+                        <i class="fas fa-book"></i>
+                        <span>Subjects</span>
+                    </button>
+                </li>
                 <!-- NEW: Exams nav link - marks entry + report cards -->
                 <li class="nav-item">
                     <button class="nav-link" onclick="showPage('exams')">
@@ -892,6 +910,53 @@
                             </table>
                         </div>
                         <p style="color: var(--text-light); padding: 12px 4px;">Each cell: subject name + teacher. Changes save automatically. A teacher can't be assigned to two classes in the same period - you'll get an error if you try.</p>
+                    </div>
+                </div>
+
+                <!--
+                    NEW: Subjects Page.
+                    Two parts: a form at the top to CREATE a subject
+                    (Principal-only - hidden for anyone else, see
+                    showSubjectCreateForm() in the JS), and a table below
+                    listing every subject that already exists, each with its
+                    assigned teachers and a way to add/remove them.
+                -->
+                <div class="page" id="subjects">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Subjects</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">The school's subject catalog - codes, type, credit hours, assigned teachers</p>
+                    </div>
+
+                    <!-- Principal-only, hidden for anyone else via JS -->
+                    <div id="subjectCreateForm" class="table-container" style="margin-bottom: 24px; display: none;">
+                        <h3 style="margin: 0 0 12px 0;">Add a Subject</h3>
+                        <div class="input-group">
+                            <input id="subjName" placeholder="Subject name, e.g. Mathematics">
+                            <input id="subjCode" placeholder="Code, e.g. MATH101">
+                            <select id="subjType" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                                <option value="Theory">Theory</option>
+                                <option value="Practical">Practical</option>
+                                <option value="Both">Both</option>
+                            </select>
+                            <input id="subjCreditHours" type="number" min="0" step="0.5" placeholder="Credit hours">
+                            <button class="btn btn-primary" onclick="handleCreateSubject()"><i class="fas fa-plus"></i> Add Subject</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Code</th>
+                                    <th>Type</th>
+                                    <th>Credit Hours</th>
+                                    <th>Assigned Teachers</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="subjectsList"><tr><td colspan="6" class="empty-state">Loading subjects...</td></tr></tbody>
+                        </table>
                     </div>
                 </div>
 
@@ -1561,6 +1626,7 @@
             await loadClassesList();
             await populateAttendanceClassFilter();
             await populateTimetableClassFilter();
+            await loadSubjects();
             await populateExamClassFilter();
             await populateFeesClassFilter();
             await loadAttendance();
@@ -2109,6 +2175,160 @@
                 await loadTimetableGrid(classId);
                 return;
             }
+        }
+
+        // ---- Subjects page ----
+
+        /*
+            NEW: loadSubjects()
+            WHAT: fetches every subject for this school, PLUS who's assigned
+            to teach each one, and draws the whole table.
+            WHY we fetch subject_teachers as a nested "join" (see the
+            `subject_teachers(id, staff(full_name))` part below) instead of a
+            separate query: Supabase lets us ask for related rows from
+            another table in the SAME request, as long as there's a foreign
+            key connecting them (subject_teachers.subject_id -> subjects.id).
+            That's one trip to the database instead of two.
+        */
+        async function loadSubjects() {
+            // Only a Principal can create a subject (matches the database
+            // rule) - show/hide the creation form to match, so nobody sees a
+            // form that would just fail when they click Add.
+            document.getElementById('subjectCreateForm').style.display = CURRENT_STAFF_ROLE === 'Principal' ? 'block' : 'none';
+
+            const { data, error } = await supabaseClient
+                .from('subjects')
+                .select('id, name, code, subject_type, credit_hours, subject_teachers(id, staff_id, staff(full_name))')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('name', { ascending: true });
+
+            if (error) {
+                document.getElementById('subjectsList').innerHTML = `<tr><td colspan="6" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const subjects = data || [];
+            if (subjects.length === 0) {
+                document.getElementById('subjectsList').innerHTML = '<tr><td colspan="6" class="empty-state">No subjects added yet</td></tr>';
+                return;
+            }
+
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+
+            document.getElementById('subjectsList').innerHTML = subjects.map(s => {
+                // Each assigned teacher shows as a little "chip" with their
+                // name and a small × to remove them (Principal only). This
+                // turns subject_teachers rows into clickable HTML pieces.
+                const teacherChips = (s.subject_teachers || []).map(st => `
+                    <span style="display: inline-flex; align-items: center; gap: 4px; background: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 12px; font-size: 0.8rem; margin: 2px;">
+                        ${st.staff ? st.staff.full_name : 'Unknown'}
+                        ${isPrincipal ? `<button type="button" onclick="removeSubjectTeacher('${st.id}')" style="border: none; background: none; color: #0369a1; cursor: pointer; font-weight: 700; padding: 0;">&times;</button>` : ''}
+                    </span>
+                `).join('') || '<span style="color: var(--text-light);">None assigned</span>';
+
+                // The "+ assign" mini form only appears for a Principal -
+                // built from the same staffCache list used everywhere else
+                // in the app (Timetable, Classes) for teacher dropdowns.
+                const assignRow = isPrincipal ? `
+                    <div style="margin-top: 6px; display: flex; gap: 6px;">
+                        <select id="subjTeacherPick-${s.id}" style="padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem;">
+                            ${staffOptionsHtml()}
+                        </select>
+                        <button class="btn" style="padding: 4px 10px; font-size: 0.8rem;" onclick="assignSubjectTeacher('${s.id}')">Assign</button>
+                    </div>
+                ` : '';
+
+                return `
+                    <tr>
+                        <td style="font-weight: 500;">${s.name}</td>
+                        <td style="font-family: monospace;">${s.code}</td>
+                        <td>${s.subject_type}</td>
+                        <td>${s.credit_hours ?? 'N/A'}</td>
+                        <td>${teacherChips}${assignRow}</td>
+                        <td>${isPrincipal ? `<button class="btn" onclick="deleteSubject('${s.id}')">Delete</button>` : ''}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // NEW: creates one subject row. Principal-only per RLS - if somehow
+        // this got called by a non-Principal (shouldn't happen, since the
+        // form is hidden for them), the database itself would still refuse
+        // it, so nothing bad can actually happen either way.
+        async function handleCreateSubject() {
+            const name = document.getElementById('subjName').value.trim();
+            const code = document.getElementById('subjCode').value.trim();
+            const type = document.getElementById('subjType').value;
+            const creditHours = document.getElementById('subjCreditHours').value;
+
+            if (!name || !code) {
+                alert('Enter both a subject name and a code.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('subjects').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                name: name,
+                code: code,
+                subject_type: type,
+                credit_hours: creditHours === '' ? null : Number(creditHours)
+            });
+
+            if (error) {
+                alert('Error adding subject: ' + error.message);
+                return;
+            }
+
+            document.getElementById('subjName').value = '';
+            document.getElementById('subjCode').value = '';
+            document.getElementById('subjCreditHours').value = '';
+            await loadSubjects();
+        }
+
+        async function deleteSubject(subjectId) {
+            if (!confirm('Delete this subject? This also removes any teacher assignments to it.')) return;
+
+            const { error } = await supabaseClient.from('subjects').delete().eq('id', subjectId);
+            if (error) {
+                alert('Error deleting subject: ' + error.message);
+                return;
+            }
+            await loadSubjects();
+        }
+
+        // NEW: adds one row to subject_teachers - "this teacher is assigned
+        // to this subject". Doesn't touch Timetable at all - this is a
+        // separate roster, not a schedule.
+        async function assignSubjectTeacher(subjectId) {
+            const staffId = document.getElementById(`subjTeacherPick-${subjectId}`).value;
+            if (!staffId) {
+                alert('Pick a teacher first.');
+                return;
+            }
+
+            const { error } = await supabaseClient.from('subject_teachers').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                subject_id: subjectId,
+                staff_id: staffId,
+                academic_year: CURRENT_ACADEMIC_YEAR
+            });
+
+            if (error) {
+                // Most likely cause: this teacher is already assigned to this
+                // subject (the unique constraint catches that), not a real bug.
+                alert('Could not assign teacher: ' + error.message);
+                return;
+            }
+            await loadSubjects();
+        }
+
+        async function removeSubjectTeacher(subjectTeacherId) {
+            const { error } = await supabaseClient.from('subject_teachers').delete().eq('id', subjectTeacherId);
+            if (error) {
+                alert('Error removing teacher: ' + error.message);
+                return;
+            }
+            await loadSubjects();
         }
 
         // ---- Exams page ----
@@ -3515,6 +3735,7 @@
                 'admission': 'New Admission',
                 'classes': 'Classes',
                 'timetable': 'Timetable',
+                'subjects': 'Subjects',
                 'exams': 'Exams',
                 'fees': 'Fees',
                 'attendance': 'Attendance'

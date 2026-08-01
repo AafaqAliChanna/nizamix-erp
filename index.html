@@ -557,6 +557,19 @@
                         <span>Subjects</span>
                     </button>
                 </li>
+                <!--
+                    NEW: Homework nav link.
+                    Opens a page to create assignments for a class and, per
+                    assignment, mark each student's submission status, marks,
+                    and feedback - same "class-first, then a grid of students"
+                    pattern as Attendance and Exams.
+                -->
+                <li class="nav-item">
+                    <button class="nav-link" onclick="showPage('homework')">
+                        <i class="fas fa-tasks"></i>
+                        <span>Homework</span>
+                    </button>
+                </li>
                 <!-- NEW: Exams nav link - marks entry + report cards -->
                 <li class="nav-item">
                     <button class="nav-link" onclick="showPage('exams')">
@@ -957,6 +970,76 @@
                             </thead>
                             <tbody id="subjectsList"><tr><td colspan="6" class="empty-state">Loading subjects...</td></tr></tbody>
                         </table>
+                    </div>
+                </div>
+
+                <!--
+                    NEW: Homework Page.
+                    Same three-view pattern as Timetable/Exams: pick a class,
+                    see a list (here: assignments instead of exams), click
+                    one to open a grid (here: each student's submission
+                    status/marks/feedback instead of exam marks).
+                -->
+                <div class="page" id="homework">
+                    <div style="margin-bottom: 30px;">
+                        <h2 style="margin: 0;">Homework</h2>
+                        <p style="color: var(--text-light); margin: 5px 0 0 0;">Create assignments and track student submissions</p>
+                    </div>
+
+                    <div class="table-container" style="margin-bottom: 24px;">
+                        <div class="input-group">
+                            <select id="homeworkClassFilter" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;" onchange="loadHomeworkForClass()"></select>
+                        </div>
+                    </div>
+
+                    <!-- List of homework for the selected class -->
+                    <div id="homeworkListView" style="display: none;">
+                        <div class="table-container" style="margin-bottom: 24px;">
+                            <h3 style="margin: 0 0 12px 0;">New Assignment</h3>
+                            <div class="input-group">
+                                <input id="hwTitle" placeholder="Title, e.g. Chapter 4 Exercises">
+                                <input id="hwSubject" placeholder="Subject">
+                                <input id="hwDueDate" type="date" title="Due date">
+                                <input id="hwTotalMarks" type="number" min="0" placeholder="Total marks (optional)">
+                            </div>
+                            <div class="input-group" style="margin-top: 12px;">
+                                <textarea id="hwDescription" placeholder="Description / instructions (optional)" rows="2" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit;"></textarea>
+                            </div>
+                            <div class="input-group" style="margin-top: 12px;">
+                                <input id="hwAttachment" type="file" title="Attach a file (optional) - e.g. the worksheet itself">
+                                <button class="btn btn-primary" onclick="handleCreateHomework()"><i class="fas fa-plus"></i> Create Assignment</button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead><tr><th>Title</th><th>Subject</th><th>Due Date</th><th></th></tr></thead>
+                                <tbody id="homeworkList"><tr><td colspan="4" class="empty-state">Select a class above</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Submissions grid for one assignment -->
+                    <div id="homeworkSubmissionsView" style="display: none;">
+                        <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                            <button class="btn" onclick="backToHomeworkList()"><i class="fas fa-arrow-left"></i> Back to Homework</button>
+                            <h3 id="homeworkSubmissionsTitle" style="margin: 0;"></h3>
+                        </div>
+                        <div class="table-container" style="margin-bottom: 16px;">
+                            <button class="btn btn-primary" onclick="saveHomeworkSubmissions()"><i class="fas fa-check"></i> Save All</button>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Status</th>
+                                        <th>Marks</th>
+                                        <th>Feedback</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="homeworkSubmissionsBody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -1627,6 +1710,7 @@
             await populateAttendanceClassFilter();
             await populateTimetableClassFilter();
             await loadSubjects();
+            await populateHomeworkClassFilter();
             await populateExamClassFilter();
             await populateFeesClassFilter();
             await loadAttendance();
@@ -2329,6 +2413,209 @@
                 return;
             }
             await loadSubjects();
+        }
+
+        // ---- Homework page ----
+
+        let currentHomeworkId = null;
+        let currentHomeworkClassId = null;
+
+        async function populateHomeworkClassFilter() {
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            if (error) {
+                console.error('Failed to load classes for homework filter:', error);
+                return;
+            }
+
+            document.getElementById('homeworkClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+        }
+
+        async function loadHomeworkForClass() {
+            const classId = document.getElementById('homeworkClassFilter').value;
+            document.getElementById('homeworkListView').style.display = 'none';
+            document.getElementById('homeworkSubmissionsView').style.display = 'none';
+            if (!classId) return;
+
+            document.getElementById('homeworkListView').style.display = 'block';
+            document.getElementById('homeworkListView').dataset.classId = classId;
+            currentHomeworkClassId = classId;
+
+            const { data, error } = await supabaseClient
+                .from('homework')
+                .select('id, title, subject, due_date')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('class_id', classId)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                .order('due_date', { ascending: false });
+
+            if (error) {
+                document.getElementById('homeworkList').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const assignments = data || [];
+            if (assignments.length === 0) {
+                document.getElementById('homeworkList').innerHTML = '<tr><td colspan="4" class="empty-state">No homework yet - create one above</td></tr>';
+                return;
+            }
+
+            document.getElementById('homeworkList').innerHTML = assignments.map(hw => `
+                <tr>
+                    <td style="font-weight: 500;">${hw.title}</td>
+                    <td>${hw.subject || 'N/A'}</td>
+                    <td>${hw.due_date}</td>
+                    <td><button class="btn btn-primary" onclick="openHomeworkSubmissions('${hw.id}', '${hw.title.replace(/'/g, "\\'")}')">View Submissions</button></td>
+                </tr>
+            `).join('');
+        }
+
+        /*
+            NEW: handleCreateHomework()
+            WHAT: creates one homework row, and if a file was chosen, uploads
+            it as the assignment's attachment.
+            WHY the insert happens BEFORE the file upload: the file's storage
+            path needs the homework's own id in it (see teacher_management.sql
+            comment about the same trick for staff documents) - and we don't
+            have that id until AFTER the row exists. So: insert first, get the
+            id back, THEN upload using that id in the path.
+        */
+        async function handleCreateHomework() {
+            const classId = document.getElementById('homeworkListView').dataset.classId;
+            const title = document.getElementById('hwTitle').value.trim();
+            const subject = document.getElementById('hwSubject').value.trim();
+            const dueDate = document.getElementById('hwDueDate').value;
+            const totalMarks = document.getElementById('hwTotalMarks').value;
+            const description = document.getElementById('hwDescription').value.trim();
+            const file = document.getElementById('hwAttachment').files[0];
+
+            if (!title || !dueDate) {
+                alert('Enter a title and a due date.');
+                return;
+            }
+
+            const { data: inserted, error } = await supabaseClient.from('homework').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId,
+                staff_id: (await supabaseClient.auth.getUser()).data.user.id,
+                subject: subject || null,
+                title: title,
+                description: description || null,
+                due_date: dueDate,
+                total_marks: totalMarks === '' ? null : Number(totalMarks),
+                academic_year: CURRENT_ACADEMIC_YEAR
+            }).select('id').single();
+
+            if (error) {
+                alert('Error creating assignment: ' + error.message);
+                return;
+            }
+
+            if (file) {
+                const path = `${CURRENT_SCHOOL_ID}/${inserted.id}/attachment_${file.name}`;
+                const { error: uploadError } = await supabaseClient.storage.from('homework-files').upload(path, file);
+                if (uploadError) {
+                    alert('Assignment created, but the attachment failed to upload: ' + uploadError.message);
+                } else {
+                    await supabaseClient.from('homework').update({ attachment_path: path }).eq('id', inserted.id);
+                }
+            }
+
+            document.getElementById('hwTitle').value = '';
+            document.getElementById('hwSubject').value = '';
+            document.getElementById('hwDueDate').value = '';
+            document.getElementById('hwTotalMarks').value = '';
+            document.getElementById('hwDescription').value = '';
+            document.getElementById('hwAttachment').value = '';
+
+            await loadHomeworkForClass();
+        }
+
+        function backToHomeworkList() {
+            document.getElementById('homeworkSubmissionsView').style.display = 'none';
+            document.getElementById('homeworkListView').style.display = 'block';
+        }
+
+        /*
+            NEW: openHomeworkSubmissions(homeworkId, title)
+            WHAT: shows one row per student in the class, each with:
+              - a Status dropdown (pending / submitted / late)
+              - a Marks box
+              - a Feedback box
+              - a small file picker, for attaching a scan/photo of that ONE
+                student's physical homework (this is what makes "student
+                submission" real in an app where students themselves never
+                log in - the TEACHER records it on their behalf, same as
+                Attendance).
+            Existing saved submissions are loaded and pre-filled; students
+            with no submission row yet just start blank (defaults to pending
+            when saved).
+        */
+        async function openHomeworkSubmissions(homeworkId, title) {
+            currentHomeworkId = homeworkId;
+            document.getElementById('homeworkListView').style.display = 'none';
+            document.getElementById('homeworkSubmissionsView').style.display = 'block';
+            document.getElementById('homeworkSubmissionsTitle').textContent = title;
+
+            const [studentsRes, submissionsRes] = await Promise.all([
+                getStudentsForClass(currentHomeworkClassId),
+                supabaseClient.from('homework_submissions').select('student_id, status, marks_obtained, feedback, submission_file_path').eq('homework_id', homeworkId)
+            ]);
+
+            const submissionsByStudent = {};
+            (submissionsRes.data || []).forEach(s => { submissionsByStudent[s.student_id] = s; });
+
+            document.getElementById('homeworkSubmissionsBody').innerHTML = studentsRes.map(s => {
+                const existing = submissionsByStudent[s.id] || {};
+                return `
+                    <tr data-student-id="${s.id}">
+                        <td style="font-weight: 500;">${s.full_name}</td>
+                        <td>
+                            <select data-field="status" style="padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px;">
+                                <option value="pending" ${(!existing.status || existing.status === 'pending') ? 'selected' : ''}>Pending</option>
+                                <option value="submitted" ${existing.status === 'submitted' ? 'selected' : ''}>Submitted</option>
+                                <option value="late" ${existing.status === 'late' ? 'selected' : ''}>Late</option>
+                            </select>
+                        </td>
+                        <td><input type="number" data-field="marks" value="${existing.marks_obtained ?? ''}" style="width: 70px; padding: 6px;"></td>
+                        <td><input type="text" data-field="feedback" value="${existing.feedback || ''}" placeholder="Feedback" style="width: 100%; padding: 6px;"></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Reads every row in the grid and upserts them all at once - exact
+        // same "loop over rows, build one array, one upsert call" pattern
+        // used by Attendance and Exams.
+        async function saveHomeworkSubmissions() {
+            const rows = document.querySelectorAll('#homeworkSubmissionsBody tr[data-student-id]');
+            const records = Array.from(rows).map(row => {
+                const marksValue = row.querySelector('[data-field="marks"]').value;
+                return {
+                    school_id: CURRENT_SCHOOL_ID,
+                    homework_id: currentHomeworkId,
+                    student_id: row.dataset.studentId,
+                    status: row.querySelector('[data-field="status"]').value,
+                    marks_obtained: marksValue === '' ? null : Number(marksValue),
+                    feedback: row.querySelector('[data-field="feedback"]').value.trim() || null
+                };
+            });
+
+            const { error } = await supabaseClient
+                .from('homework_submissions')
+                .upsert(records, { onConflict: 'homework_id,student_id' });
+
+            if (error) {
+                alert('Error saving submissions: ' + error.message);
+                return;
+            }
+            alert('Saved ' + records.length + ' submission(s).');
         }
 
         // ---- Exams page ----
@@ -3736,6 +4023,7 @@
                 'classes': 'Classes',
                 'timetable': 'Timetable',
                 'subjects': 'Subjects',
+                'homework': 'Homework',
                 'exams': 'Exams',
                 'fees': 'Fees',
                 'attendance': 'Attendance'

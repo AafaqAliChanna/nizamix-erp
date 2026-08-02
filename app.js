@@ -125,6 +125,16 @@ const supabaseClient = window.supabase.createClient(
         let dashDefaulterChartInstance = null;
 
         async function loadDashboardCharts() {
+            // NEW: split the dashboard by role - Principal sees the school-wide
+            // fee/defaulter section (unchanged), a Teacher sees "My Overview"
+            // instead, since the fee data is blocked for them by RLS anyway.
+            const isPrincipal = CURRENT_STAFF_ROLE === 'Principal';
+            document.getElementById('dashPrincipalSection').style.display = isPrincipal ? 'block' : 'none';
+            document.getElementById('dashTeacherSection').style.display = isPrincipal ? 'none' : 'block';
+            if (!isPrincipal) {
+                await loadTeacherOverview();
+            }
+
             // ---- School-wide attendance ----
             const { data: attendanceData } = await supabaseClient
                 .from('attendance')
@@ -216,6 +226,78 @@ const supabaseClient = window.supabase.createClient(
             }
         }
 
+        /*
+            NEW: loadTeacherOverview()
+            WHAT: fills in "My Overview" for a Teacher - today's timetable
+            periods, and a plain list of every class + subject they teach.
+            WHY "today's" timetable specifically, not the whole week: this is
+            the DASHBOARD - the first thing a teacher sees when they log in.
+            The whole week is already available on the Timetable page if
+            they want it; here, "what do I have TODAY" is the useful
+            at-a-glance answer.
+        */
+        async function loadTeacherOverview() {
+            const { data: { user } } = await supabaseClient.auth.getUser();
+
+            // JavaScript's getDay() returns 0=Sunday, 1=Monday...6=Saturday.
+            // Our timetable uses 1=Monday...5=Friday (see the Timetable page
+            // JS further down) - so Sunday/Saturday need to just show "no
+            // school today" instead of trying to match a day number we don't
+            // actually use.
+            const jsDay = new Date().getDay();
+            const ourDayNumber = jsDay; // 1-5 lines up for Mon-Fri directly
+
+            if (jsDay === 0 || jsDay === 6) {
+                document.getElementById('dashMyTimetableToday').innerHTML = '<tr><td colspan="3" class="empty-state">No school today</td></tr>';
+            } else {
+                const { data: periods } = await supabaseClient
+                    .from('timetable')
+                    .select('period_number, subject, classes(grade, section)')
+                    .eq('school_id', CURRENT_SCHOOL_ID)
+                    .eq('staff_id', user.id)
+                    .eq('day_of_week', ourDayNumber)
+                    .eq('academic_year', CURRENT_ACADEMIC_YEAR)
+                    .order('period_number', { ascending: true });
+
+                const rows = periods || [];
+                document.getElementById('dashMyTimetableToday').innerHTML = rows.length > 0
+                    ? rows.map(p => {
+                        const classLabel = p.classes ? `Grade ${p.classes.grade}${p.classes.section ? '-' + p.classes.section : ''}` : 'N/A';
+                        return `<tr><td>Period ${p.period_number}</td><td>${classLabel}</td><td>${p.subject}</td></tr>`;
+                    }).join('')
+                    : '<tr><td colspan="3" class="empty-state">No periods scheduled today</td></tr>';
+            }
+
+            // Same "which classes/subjects" logic already used on the Staff
+            // Profile page - reused here instead of duplicated.
+            const { data: allPeriods } = await supabaseClient
+                .from('timetable')
+                .select('subject, classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('staff_id', user.id)
+                .eq('academic_year', CURRENT_ACADEMIC_YEAR);
+
+            const { data: classTeacherRows } = await supabaseClient
+                .from('class_teachers')
+                .select('classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('staff_id', user.id)
+                .eq('is_class_teacher', true);
+
+            const classLabels = new Set();
+            (allPeriods || []).forEach(p => {
+                if (p.classes) classLabels.add(`Grade ${p.classes.grade}${p.classes.section ? '-' + p.classes.section : ''}`);
+            });
+            (classTeacherRows || []).forEach(c => {
+                if (c.classes) classLabels.add(`Grade ${c.classes.grade}${c.classes.section ? '-' + c.classes.section : ''} (Class Teacher)`);
+            });
+            const subjectNames = [...new Set((allPeriods || []).map(p => p.subject))];
+
+            const classesText = classLabels.size > 0 ? [...classLabels].join(', ') : 'None assigned yet';
+            const subjectsText = subjectNames.length > 0 ? subjectNames.join(', ') : 'None assigned yet';
+            document.getElementById('dashMySubjects').textContent = `Classes: ${classesText}. Subjects: ${subjectsText}.`;
+        }
+
         async function loadData() {
             // NEW (Step 4): load real classes before students, so the class
             // dropdown in "Add Student" is ready before anyone opens that form.
@@ -231,6 +313,7 @@ const supabaseClient = window.supabase.createClient(
             await populateTimetableClassFilter();
             await loadSubjects();
             await populateCurriculumFilters();
+            await populateCertificateClassFilter();
             await populateHomeworkClassFilter();
             await populateAnnouncementClassFilter();
             await loadAnnouncements();
@@ -239,6 +322,7 @@ const supabaseClient = window.supabase.createClient(
             await populateFeesClassFilter();
             await loadAttendance();
             await loadDashboardCharts();
+            await updateUnreadMessageBadge();
         }
 
         async function loadStudents() {
@@ -1162,6 +1246,203 @@ const supabaseClient = window.supabase.createClient(
             await loadChaptersAndTopics();
         }
 
+        // ---- Certificates page ----
+
+        // Placeholder text changes per certificate type, so the Principal
+        // knows roughly what to write without guessing the format each time.
+        const CERT_PLACEHOLDERS = {
+            Character: 'e.g. Conduct has been satisfactory and exemplary throughout their time at school.',
+            Bonafide: 'e.g. For the purpose of visa application / passport application / scholarship.',
+            Leaving: 'e.g. Reason for leaving: family relocation. Conduct during stay: good.',
+            Achievement: 'e.g. 1st Position in the Inter-School Science Fair 2026.'
+        };
+
+        function updateCertDetailsPlaceholder() {
+            const type = document.getElementById('certType').value;
+            document.getElementById('certDetails').placeholder = CERT_PLACEHOLDERS[type];
+        }
+
+        async function populateCertificateClassFilter() {
+            const { data } = await supabaseClient
+                .from('classes')
+                .select('id, grade, section')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('grade', { ascending: true });
+
+            document.getElementById('certClassFilter').innerHTML =
+                '<option value="">Select a class...</option>' +
+                (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            document.getElementById('certIssuedDate').value = todayStr();
+            updateCertDetailsPlaceholder();
+        }
+
+        async function loadStudentsForCertificate() {
+            const classId = document.getElementById('certClassFilter').value;
+            document.getElementById('certificateHistory').innerHTML = '<tr><td colspan="4" class="empty-state">Select a student above</td></tr>';
+            if (!classId) {
+                document.getElementById('certStudentFilter').innerHTML = '<option value="">Select a class first</option>';
+                return;
+            }
+
+            const students = await getStudentsForClass(classId);
+            document.getElementById('certStudentFilter').innerHTML =
+                '<option value="">Select a student...</option>' +
+                students.map(s => `<option value="${s.id}">${s.full_name}</option>`).join('');
+        }
+
+        async function loadCertificateHistory() {
+            const studentId = document.getElementById('certStudentFilter').value;
+            if (!studentId) {
+                document.getElementById('certificateHistory').innerHTML = '<tr><td colspan="4" class="empty-state">Select a student above</td></tr>';
+                return;
+            }
+
+            const { data, error } = await supabaseClient
+                .from('certificates')
+                .select('id, certificate_number, certificate_type, details, issued_date')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('student_id', studentId)
+                .order('certificate_number', { ascending: false });
+
+            if (error) {
+                document.getElementById('certificateHistory').innerHTML = `<tr><td colspan="4" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const certs = data || [];
+            if (certs.length === 0) {
+                document.getElementById('certificateHistory').innerHTML = '<tr><td colspan="4" class="empty-state">No certificates issued yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('certificateHistory').innerHTML = certs.map(c => `
+                <tr>
+                    <td>${c.certificate_number}</td>
+                    <td>${c.certificate_type}</td>
+                    <td>${c.issued_date}</td>
+                    <td><button class="btn" onclick="reprintCertificate('${c.certificate_number}', '${c.certificate_type}', '${(c.details || '').replace(/'/g, "\\'")}', '${c.issued_date}')">View / Print</button></td>
+                </tr>
+            `).join('');
+        }
+
+        /*
+            NEW: buildCertificateBody(type, student, details)
+            WHAT: this is the actual wording of each certificate type - real
+            school-certificate phrasing, with the student's own data (name,
+            father's name, class, gender-correct pronouns) dropped into the
+            right spots automatically.
+            WHY gender matters here: "son of" vs "daughter of", and "he" vs
+            "she", are standard on these documents - we already collected
+            gender on the Admission form, so we use it. If it's missing
+            (older student records from before that field existed), it
+            falls back to gender-neutral wording instead of guessing wrong.
+        */
+        function buildCertificateBody(type, student, classLabel, details) {
+            const childOf = student.gender === 'Female' ? 'daughter' : (student.gender === 'Male' ? 'son' : 'child');
+            const pronoun = student.gender === 'Female' ? 'She' : (student.gender === 'Male' ? 'He' : 'The student');
+            const possessive = student.gender === 'Female' ? 'her' : (student.gender === 'Male' ? 'his' : 'their');
+            const parentName = student.father_name || student.guardian_name || 'Guardian';
+
+            if (type === 'Character') {
+                return `This is to certify that <strong>${student.full_name}</strong>, ${childOf} of ${parentName}, is/was a student of ${CURRENT_SCHOOL_NAME}, studying in ${classLabel}, bearing Roll Number ${student.roll_number}. ` +
+                    `${pronoun} bears a good moral character. ${details || ''} This certificate is issued upon request.`;
+            }
+            if (type === 'Bonafide') {
+                return `This is to certify that <strong>${student.full_name}</strong>, ${childOf} of ${parentName}, is a bonafide student of ${CURRENT_SCHOOL_NAME}, currently studying in ${classLabel} for the academic year ${CURRENT_ACADEMIC_YEAR}. ${details || ''}`;
+            }
+            if (type === 'Leaving') {
+                return `This is to certify that <strong>${student.full_name}</strong>, ${childOf} of ${parentName}, bearing Roll Number ${student.roll_number}, was a bonafide student of ${CURRENT_SCHOOL_NAME}, studying in ${classLabel}. ` +
+                    `${details || ''} This School Leaving Certificate is issued for future reference. We wish ${possessive} the very best.`;
+            }
+            // Achievement
+            return `This certificate is proudly presented to <strong>${student.full_name}</strong> of ${classLabel}, ${CURRENT_SCHOOL_NAME}, in recognition of the following achievement: ${details || '(no details provided)'}.`;
+        }
+
+        const CERT_TYPE_TITLES = {
+            Character: 'Character Certificate',
+            Bonafide: 'Bonafide Certificate',
+            Leaving: 'School Leaving Certificate',
+            Achievement: 'Certificate of Achievement'
+        };
+
+        async function handleGenerateCertificate() {
+            const studentId = document.getElementById('certStudentFilter').value;
+            const type = document.getElementById('certType').value;
+            const issuedDate = document.getElementById('certIssuedDate').value;
+            const details = document.getElementById('certDetails').value.trim();
+
+            if (!studentId || !issuedDate) {
+                alert('Select a student and an issue date.');
+                return;
+            }
+
+            const { data: student, error: studentError } = await supabaseClient
+                .from('students')
+                .select('full_name, roll_number, gender, father_name, guardian_name, classes(grade, section)')
+                .eq('id', studentId)
+                .single();
+
+            if (studentError || !student) {
+                alert('Could not load this student.');
+                return;
+            }
+
+            const staffId = (await supabaseClient.auth.getUser()).data.user.id;
+
+            const { data: inserted, error } = await supabaseClient.from('certificates').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                student_id: studentId,
+                certificate_type: type,
+                details: details || null,
+                issued_date: issuedDate,
+                issued_by: staffId
+            }).select('certificate_number').single();
+
+            if (error) {
+                alert('Error saving certificate: ' + error.message);
+                return;
+            }
+
+            const classLabel = student.classes ? `Grade ${student.classes.grade}${student.classes.section ? '-' + student.classes.section : ''}` : 'N/A';
+            showCertificateOverlay(type, inserted.certificate_number, issuedDate, buildCertificateBody(type, student, classLabel, details));
+
+            document.getElementById('certDetails').value = '';
+            await loadCertificateHistory();
+        }
+
+        // NEW: re-opens a certificate that was already issued before, using
+        // the SAME saved details text - re-generates the wording live
+        // (rather than storing the finished sentence), so if you ever
+        // update the wording template, old certificates reprint with the
+        // new wording too, not stuck with whatever phrasing existed when
+        // they were first issued.
+        async function reprintCertificate(certificateNumber, type, details, issuedDate) {
+            const studentId = document.getElementById('certStudentFilter').value;
+            const { data: student, error } = await supabaseClient
+                .from('students')
+                .select('full_name, roll_number, gender, father_name, guardian_name, classes(grade, section)')
+                .eq('id', studentId)
+                .single();
+
+            if (error || !student) {
+                alert('Could not load this student.');
+                return;
+            }
+
+            const classLabel = student.classes ? `Grade ${student.classes.grade}${student.classes.section ? '-' + student.classes.section : ''}` : 'N/A';
+            showCertificateOverlay(type, certificateNumber, issuedDate, buildCertificateBody(type, student, classLabel, details));
+        }
+
+        function showCertificateOverlay(type, certificateNumber, issuedDate, bodyHtml) {
+            document.getElementById('certSchoolName').textContent = CURRENT_SCHOOL_NAME;
+            document.getElementById('certTypeTitle').textContent = CERT_TYPE_TITLES[type];
+            document.getElementById('certBody').innerHTML = bodyHtml;
+            document.getElementById('certDateFooter').textContent = issuedDate;
+            document.getElementById('certNumberFooter').textContent = certificateNumber;
+            document.getElementById('certOverlay').style.display = 'block';
+        }
+
         // ---- Homework page ----
 
         let currentHomeworkId = null;
@@ -1473,6 +1754,35 @@ const supabaseClient = window.supabase.createClient(
                 students.map(s => `<option value="${s.id}">${s.full_name}</option>`).join('');
         }
 
+        // NEW: checks how many parent messages this staff member hasn't
+        // opened yet, and shows/hides the red badge on the Messages nav
+        // button and the dashboard banner to match. RLS already limits which
+        // messages this query can even see (a Teacher only sees messages
+        // about their own classes) - so we don't need to repeat that
+        // filtering logic here, just ask "how many unread, period".
+        async function updateUnreadMessageBadge() {
+            const { count } = await supabaseClient
+                .from('messages')
+                .select('id', { count: 'exact', head: true })
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('sender_role', 'parent')
+                .is('read_at', null);
+
+            const badge = document.getElementById('unreadMessageBadge');
+            const banner = document.getElementById('dashUnreadBanner');
+            const bannerText = document.getElementById('dashUnreadText');
+
+            if (count && count > 0) {
+                badge.textContent = count;
+                badge.style.display = 'inline-block';
+                bannerText.textContent = `You have ${count} unread message${count === 1 ? '' : 's'}`;
+                banner.style.display = 'block';
+            } else {
+                badge.style.display = 'none';
+                banner.style.display = 'none';
+            }
+        }
+
         async function loadMessageThread() {
             const studentId = document.getElementById('msgStudentFilter').value;
             if (!studentId) {
@@ -1482,7 +1792,7 @@ const supabaseClient = window.supabase.createClient(
 
             const { data, error } = await supabaseClient
                 .from('messages')
-                .select('sender_role, body, created_at')
+                .select('id, sender_role, body, created_at, read_at')
                 .eq('school_id', CURRENT_SCHOOL_ID)
                 .eq('student_id', studentId)
                 .order('created_at', { ascending: true });
@@ -1500,14 +1810,28 @@ const supabaseClient = window.supabase.createClient(
 
             // Parent messages align left, staff messages align right - a common,
             // familiar chat-style layout so it's obvious at a glance who said what.
-            document.getElementById('messageThread').innerHTML = messages.map(m => `
+            // NEW: an unread parent message also gets a red left border, so it
+            // stands out even before you notice the badge count.
+            document.getElementById('messageThread').innerHTML = messages.map(m => {
+                const isUnread = m.sender_role === 'parent' && !m.read_at;
+                return `
                 <div style="display: flex; justify-content: ${m.sender_role === 'staff' ? 'flex-end' : 'flex-start'}; margin-bottom: 10px;">
-                    <div style="max-width: 70%; background: ${m.sender_role === 'staff' ? '#e0f2fe' : '#f1f5f9'}; padding: 10px 14px; border-radius: 10px;">
-                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-light); text-transform: capitalize;">${m.sender_role}</p>
+                    <div style="max-width: 70%; background: ${m.sender_role === 'staff' ? '#e0f2fe' : '#f1f5f9'}; padding: 10px 14px; border-radius: 10px; ${isUnread ? 'border-left: 4px solid #dc2626;' : ''}">
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-light); text-transform: capitalize;">${m.sender_role}${isUnread ? ' - NEW' : ''}</p>
                         <p style="margin: 4px 0 0 0;">${m.body}</p>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
+
+            // NEW: opening this thread means we've now seen every unread parent
+            // message in it - mark them all read, then refresh the badge/banner
+            // so the red highlight clears once it's actually been looked at.
+            const unreadIds = messages.filter(m => m.sender_role === 'parent' && !m.read_at).map(m => m.id);
+            if (unreadIds.length > 0) {
+                await supabaseClient.from('messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+                await updateUnreadMessageBadge();
+            }
         }
 
         async function sendStaffMessage() {
@@ -3014,6 +3338,7 @@ const supabaseClient = window.supabase.createClient(
                 'timetable': 'Timetable',
                 'subjects': 'Subjects',
                 'curriculum': 'Curriculum',
+                'certificates': 'Certificates',
                 'homework': 'Homework',
                 'announcements': 'Announcements',
                 'messages': 'Messages',

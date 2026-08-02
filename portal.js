@@ -122,6 +122,13 @@
         document.getElementById('tab-' + tabName).style.display = 'block';
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelector(`.tab-btn[data-tab="${tabName}"]`).classList.add('active');
+
+        // Only NOW - the parent genuinely opening this tab - do we mark
+        // anything as read. See the big comment on loadMessagesTab() above
+        // for why this can't happen during the earlier background pre-load.
+        if (tabName === 'messages') {
+            markMessagesRead();
+        }
     }
 
     async function loadAllTabs() {
@@ -284,10 +291,22 @@
     }
 
     // ---- Messages ----
+    /*
+        NEW: loadMessagesTab() only RENDERS the conversation - it does NOT
+        mark anything as read. WHY that split matters: this function also
+        gets called automatically in the background right after login (see
+        loadAllTabs below), to make every tab feel instant when clicked.
+        If it marked messages read just for being LOADED (not actually
+        looked at), the red "unread" highlight would vanish before the
+        parent ever saw it - the whole feature would be pointless. Marking
+        as read only happens in markMessagesRead(), called separately, only
+        when the parent actually clicks the Messages tab (see switchTab()
+        further down).
+    */
     async function loadMessagesTab() {
         const { data } = await supabaseClient
             .from('messages')
-            .select('sender_role, body, created_at')
+            .select('id, sender_role, body, created_at, read_at')
             .eq('school_id', CURRENT_SCHOOL_ID)
             .eq('student_id', currentChildId)
             .order('created_at', { ascending: true });
@@ -298,14 +317,62 @@
             return;
         }
 
-        document.getElementById('messageThread').innerHTML = messages.map(m => `
+        // An unread teacher message (one the parent hasn't opened this
+        // thread to see yet) gets a red left border, same idea as the staff
+        // side's unread highlighting.
+        document.getElementById('messageThread').innerHTML = messages.map(m => {
+            const isUnread = m.sender_role === 'staff' && !m.read_at;
+            return `
             <div style="display: flex; justify-content: ${m.sender_role === 'parent' ? 'flex-end' : 'flex-start'}; margin-bottom: 10px;">
-                <div style="max-width: 70%; background: ${m.sender_role === 'parent' ? '#e0f2fe' : '#f1f5f9'}; padding: 10px 14px; border-radius: 10px;">
-                    <p style="margin: 0; font-size: 0.75rem; color: var(--text-light); text-transform: capitalize;">${m.sender_role === 'parent' ? 'You' : 'Teacher'}</p>
+                <div style="max-width: 70%; background: ${m.sender_role === 'parent' ? '#e0f2fe' : '#f1f5f9'}; padding: 10px 14px; border-radius: 10px; ${isUnread ? 'border-left: 4px solid #dc2626;' : ''}">
+                    <p style="margin: 0; font-size: 0.75rem; color: var(--text-light); text-transform: capitalize;">${m.sender_role === 'parent' ? 'You' : 'Teacher'}${isUnread ? ' - NEW' : ''}</p>
                     <p style="margin: 4px 0 0 0;">${m.body}</p>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+    }
+
+    // NEW: the actual "mark as read" step - only called from switchTab()
+    // when the parent genuinely opens the Messages tab.
+    async function markMessagesRead() {
+        const { data } = await supabaseClient
+            .from('messages')
+            .select('id')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('student_id', currentChildId)
+            .eq('sender_role', 'staff')
+            .is('read_at', null);
+
+        const unreadIds = (data || []).map(m => m.id);
+        if (unreadIds.length > 0) {
+            await supabaseClient.from('messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+            await loadMessagesTab(); // re-render so the red highlight actually clears
+            await updateParentUnreadBadge();
+        }
+    }
+
+    // NEW: counts unread teacher messages across ALL of this parent's
+    // children (not just whichever one is currently selected), since the
+    // badge on the tab button should reflect everything, not just the
+    // currently-viewed child.
+    async function updateParentUnreadBadge() {
+        const childIds = children.map(c => c.id);
+        const { count } = await supabaseClient
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .in('student_id', childIds)
+            .eq('sender_role', 'staff')
+            .is('read_at', null);
+
+        const badge = document.getElementById('parentUnreadBadge');
+        if (count && count > 0) {
+            badge.textContent = count;
+            badge.style.display = 'inline-block';
+        } else {
+            badge.style.display = 'none';
+        }
     }
 
     async function sendParentMessage() {

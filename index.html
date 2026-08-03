@@ -1159,6 +1159,33 @@
                             <tbody id="announcementsList"><tr><td colspan="3" class="empty-state">Loading...</td></tr></tbody>
                         </table>
                     </div>
+
+                    <!--
+                        NEW: School Events / Calendar.
+                        WHAT: same idea as announcements, but with a DATE
+                        attached - this is what powers "School Calendar
+                        Highlights" on the parent dashboard. Without this,
+                        parents would have no calendar to see at all.
+                    -->
+                    <div class="table-container" style="margin-top: 24px; margin-bottom: 24px;">
+                        <h3 style="margin: 0 0 12px 0;">New School Event</h3>
+                        <div class="input-group">
+                            <input id="evtTitle" placeholder="Event title, e.g. Sports Day">
+                            <input id="evtDate" type="date" title="Event date">
+                            <select id="evtClass" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;"></select>
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <textarea id="evtDescription" placeholder="Description (optional)" rows="2" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit;"></textarea>
+                        </div>
+                        <button class="btn btn-primary" style="margin-top: 12px;" onclick="handleCreateEvent()"><i class="fas fa-calendar-plus"></i> Add Event</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Event</th><th>Date</th><th>For</th></tr></thead>
+                            <tbody id="eventsList"><tr><td colspan="3" class="empty-state">Loading...</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- NEW: Messages Page. Pick a class, pick a student, see and

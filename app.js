@@ -317,6 +317,7 @@ const supabaseClient = window.supabase.createClient(
             await populateHomeworkClassFilter();
             await populateAnnouncementClassFilter();
             await loadAnnouncements();
+            await loadEvents();
             await populateMessageClassFilter();
             await populateExamClassFilter();
             await populateFeesClassFilter();
@@ -1662,9 +1663,73 @@ const supabaseClient = window.supabase.createClient(
             const wholeSchoolOption = CURRENT_STAFF_ROLE === 'Principal'
                 ? '<option value="">Whole School</option>' : '';
 
-            document.getElementById('annClass').innerHTML =
-                wholeSchoolOption +
+            const optionsHtml = wholeSchoolOption +
                 (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            document.getElementById('annClass').innerHTML = optionsHtml;
+            // NEW: the School Events form uses the exact same class list and
+            // the exact same "whole school vs my classes" rule - no reason
+            // to write a second query for it.
+            document.getElementById('evtClass').innerHTML = optionsHtml;
+            document.getElementById('evtDate').value = todayStr();
+        }
+
+        // NEW: creates a school_events row - same shape as
+        // handleCreateAnnouncement() just below it, with a date attached.
+        async function handleCreateEvent() {
+            const title = document.getElementById('evtTitle').value.trim();
+            const eventDate = document.getElementById('evtDate').value;
+            const classId = document.getElementById('evtClass').value;
+            const description = document.getElementById('evtDescription').value.trim();
+
+            if (!title || !eventDate) {
+                alert('Enter both a title and a date.');
+                return;
+            }
+
+            const staffId = (await supabaseClient.auth.getUser()).data.user.id;
+
+            const { error } = await supabaseClient.from('school_events').insert({
+                school_id: CURRENT_SCHOOL_ID,
+                class_id: classId || null,
+                title: title,
+                event_date: eventDate,
+                description: description || null,
+                created_by: staffId
+            });
+
+            if (error) {
+                alert('Error adding event: ' + error.message);
+                return;
+            }
+
+            document.getElementById('evtTitle').value = '';
+            document.getElementById('evtDescription').value = '';
+            await loadEvents();
+        }
+
+        async function loadEvents() {
+            const { data, error } = await supabaseClient
+                .from('school_events')
+                .select('title, event_date, classes(grade, section)')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .order('event_date', { ascending: true });
+
+            if (error) {
+                document.getElementById('eventsList').innerHTML = `<tr><td colspan="3" class="empty-state" style="color: #ef4444;">Error: ${error.message}</td></tr>`;
+                return;
+            }
+
+            const events = data || [];
+            if (events.length === 0) {
+                document.getElementById('eventsList').innerHTML = '<tr><td colspan="3" class="empty-state">No events added yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('eventsList').innerHTML = events.map(e => {
+                const forLabel = e.classes ? `Grade ${e.classes.grade}${e.classes.section ? '-' + e.classes.section : ''}` : 'Whole School';
+                return `<tr><td>${e.title}</td><td>${e.event_date}</td><td>${forLabel}</td></tr>`;
+            }).join('');
         }
 
         async function loadAnnouncements() {

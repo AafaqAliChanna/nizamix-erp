@@ -132,12 +132,178 @@
     }
 
     async function loadAllTabs() {
+        await loadDashboardTab();
         await loadAttendanceTab();
         await loadHomeworkTab();
         await loadExamsTab();
         await loadFeesTab();
         await loadMessagesTab();
         await loadAnnouncementsTab();
+    }
+
+    /*
+        NEW: loadDashboardTab()
+        WHAT: this is the parent's landing page - a summary pulled from
+        several different places at once, so a parent doesn't have to
+        click through six tabs just to see "is everything okay today".
+        WHY so many separate queries instead of one big one: each piece
+        (attendance, homework, exams, fees, announcements, calendar) lives
+        in its own table for good reasons we set up earlier - this
+        function's whole job is just to ask each one a small, specific
+        question and stitch the answers together into one screen.
+    */
+    async function loadDashboardTab() {
+        const child = children.find(c => c.id === currentChildId);
+        const classLabel = child.classes ? `Grade ${child.classes.grade}${child.classes.section ? '-' + child.classes.section : ''}` : 'N/A';
+
+        // ---- Child summary + current class ----
+        document.getElementById('dashChildName').textContent = child.full_name;
+        document.getElementById('dashChildClass').textContent = classLabel;
+
+        const { data: fullChild } = await supabaseClient
+            .from('students')
+            .select('photo_path')
+            .eq('id', currentChildId)
+            .maybeSingle();
+
+        const photoImg = document.getElementById('dashChildPhoto');
+        photoImg.style.display = 'none';
+        if (fullChild?.photo_path) {
+            const { data: signed } = await supabaseClient.storage.from('student-photos').createSignedUrl(fullChild.photo_path, 3600);
+            if (signed?.signedUrl) {
+                photoImg.src = signed.signedUrl;
+                photoImg.style.display = 'inline-block';
+            }
+        }
+
+        // ---- Today's attendance ----
+        const { data: todayAtt } = await supabaseClient
+            .from('attendance')
+            .select('status')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('student_id', currentChildId)
+            .eq('date', new Date().toISOString().split('T')[0])
+            .maybeSingle();
+
+        const attEl = document.getElementById('dashTodayAttendance');
+        if (!todayAtt) {
+            attEl.textContent = 'Not marked yet';
+            attEl.style.color = 'var(--text-light)';
+        } else {
+            attEl.textContent = todayAtt.status === 'present' ? 'Present' : 'Absent';
+            attEl.style.color = todayAtt.status === 'present' ? '#166534' : '#991b1b';
+        }
+
+        // ---- Homework due today ----
+        const todayStr = new Date().toISOString().split('T')[0];
+        const { data: dueTodayHw } = await supabaseClient
+            .from('homework')
+            .select('title, subject')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('class_id', child.class_id)
+            .eq('due_date', todayStr);
+
+        document.getElementById('dashHomeworkToday').innerHTML = (dueTodayHw && dueTodayHw.length > 0)
+            ? dueTodayHw.map(h => `<p>📘 <strong>${h.title}</strong>${h.subject ? ' - ' + h.subject : ''}</p>`).join('')
+            : '<p class="empty-state">Nothing due today</p>';
+
+        // ---- Upcoming exams ----
+        // "Upcoming" here means: exams for this class that don't have any
+        // marks entered for THIS child yet. There's no exam date field in
+        // the schema (exams only track term/year, not a specific day), so
+        // this is the closest honest proxy: not yet graded = presumably
+        // not yet happened, or at least not yet finished.
+        const { data: allExams } = await supabaseClient
+            .from('exams')
+            .select('id, name, term')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('class_id', child.class_id);
+
+        const upcomingExams = [];
+        for (const ex of (allExams || [])) {
+            const { count } = await supabaseClient
+                .from('exam_results')
+                .select('id', { count: 'exact', head: true })
+                .eq('exam_id', ex.id)
+                .eq('student_id', currentChildId);
+            if (!count || count === 0) upcomingExams.push(ex);
+        }
+
+        document.getElementById('dashUpcomingExams').innerHTML = upcomingExams.length > 0
+            ? upcomingExams.map(ex => `<p>📝 ${ex.name} (${ex.term})</p>`).join('')
+            : '<p class="empty-state">No upcoming exams - all graded, or none scheduled</p>';
+
+        // ---- Fee due ----
+        const { data: unpaidInvoices } = await supabaseClient
+            .from('fee_invoices')
+            .select('month, amount_due')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('student_id', currentChildId)
+            .eq('paid', false);
+
+        const feeDueEl = document.getElementById('dashFeeDue');
+        if (unpaidInvoices && unpaidInvoices.length > 0) {
+            const totalDue = unpaidInvoices.reduce((sum, inv) => sum + Number(inv.amount_due), 0);
+            feeDueEl.textContent = totalDue + ' (' + unpaidInvoices.length + ' month' + (unpaidInvoices.length > 1 ? 's' : '') + ')';
+            feeDueEl.style.color = '#991b1b';
+        } else {
+            feeDueEl.textContent = 'All paid';
+            feeDueEl.style.color = '#166534';
+        }
+
+        // ---- Unread messages count ----
+        const { count: unreadCount } = await supabaseClient
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .eq('student_id', currentChildId)
+            .eq('sender_role', 'staff')
+            .is('read_at', null);
+
+        document.getElementById('dashUnreadCount').textContent = unreadCount || 0;
+        document.getElementById('dashUnreadCount').style.color = (unreadCount && unreadCount > 0) ? '#991b1b' : '#166534';
+
+        // ---- School calendar highlights ----
+        const { data: events } = await supabaseClient
+            .from('school_events')
+            .select('title, event_date')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .gte('event_date', todayStr)
+            .order('event_date', { ascending: true })
+            .limit(5);
+
+        document.getElementById('dashCalendar').innerHTML = (events && events.length > 0)
+            ? events.map(e => `<p>📅 ${e.event_date} - ${e.title}</p>`).join('')
+            : '<p class="empty-state">No upcoming events</p>';
+
+        // ---- Recent announcements (just the latest 3, full list is its own tab) ----
+        const { data: recentAnnouncements } = await supabaseClient
+            .from('announcements')
+            .select('title, created_at')
+            .eq('school_id', CURRENT_SCHOOL_ID)
+            .order('created_at', { ascending: false })
+            .limit(3);
+
+        document.getElementById('dashAnnouncements').innerHTML = (recentAnnouncements && recentAnnouncements.length > 0)
+            ? recentAnnouncements.map(a => `<p>📢 ${a.title} <span style="color: var(--text-light); font-size: 12px;">(${new Date(a.created_at).toLocaleDateString()})</span></p>`).join('')
+            : '<p class="empty-state">No announcements yet</p>';
+
+        // ---- Latest notifications: a merged, time-sorted feed ----
+        // WHY merge three different kinds of things into one list: a real
+        // "notifications" feed is supposed to answer "what's new" in ONE
+        // place, not make you check three separate tabs to find out. Each
+        // item gets a "kind" and its own timestamp, then everything gets
+        // sorted together by how recent it is.
+        const notifications = [];
+        if (unreadCount > 0) notifications.push({ time: new Date(), text: `You have ${unreadCount} unread message(s) from the school`, icon: '💬' });
+        if (dueTodayHw && dueTodayHw.length > 0) notifications.push({ time: new Date(), text: `${dueTodayHw.length} homework item(s) due today`, icon: '📘' });
+        (recentAnnouncements || []).slice(0, 2).forEach(a => notifications.push({ time: new Date(a.created_at), text: `New announcement: ${a.title}`, icon: '📢' }));
+
+        notifications.sort((a, b) => b.time - a.time);
+
+        document.getElementById('dashNotifications').innerHTML = notifications.length > 0
+            ? notifications.map(n => `<p>${n.icon} ${n.text}</p>`).join('')
+            : '<p class="empty-state">Nothing new right now</p>';
     }
 
     // ---- Attendance ----

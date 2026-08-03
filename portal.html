@@ -109,7 +109,8 @@
     </div>
 
     <div class="tabs no-print">
-        <button class="tab-btn active" data-tab="attendance" onclick="switchTab('attendance')"><i class="fas fa-calendar-check"></i> Attendance</button>
+        <button class="tab-btn active" data-tab="dashboard" onclick="switchTab('dashboard')"><i class="fas fa-house"></i> Dashboard</button>
+        <button class="tab-btn" data-tab="attendance" onclick="switchTab('attendance')"><i class="fas fa-calendar-check"></i> Attendance</button>
         <button class="tab-btn" data-tab="homework" onclick="switchTab('homework')"><i class="fas fa-tasks"></i> Homework</button>
         <button class="tab-btn" data-tab="exams" onclick="switchTab('exams')"><i class="fas fa-file-lines"></i> Exams</button>
         <button class="tab-btn" data-tab="fees" onclick="switchTab('fees')"><i class="fas fa-money-bill"></i> Fees</button>
@@ -117,8 +118,80 @@
         <button class="tab-btn" data-tab="announcements" onclick="switchTab('announcements')"><i class="fas fa-bullhorn"></i> Announcements</button>
     </div>
 
+    <!--
+        NEW: Dashboard - the parent's landing page. Everything on it is
+        either pulled straight from data that already exists elsewhere in
+        the portal (attendance, homework, fees...) or newly built for this
+        (School Calendar, via the school_events table). Nothing here is
+        editable - it's a summary view, with Quick Links to jump into the
+        real tab if a parent wants more detail.
+    -->
+    <div class="tab-page" id="tab-dashboard">
+        <div class="card">
+            <h3>Child Summary</h3>
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <img id="dashChildPhoto" src="" alt="" style="width: 70px; height: 70px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border-color); display: none;" onerror="this.style.display='none'">
+                <div>
+                    <p style="font-size: 18px; font-weight: 700;" id="dashChildName"></p>
+                    <p id="dashChildClass" style="color: var(--text-light);"></p>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+            <div class="card" style="margin-bottom: 0;">
+                <h3 style="font-size: 14px; color: var(--text-light); text-transform: uppercase;">Today's Attendance</h3>
+                <p id="dashTodayAttendance" style="font-size: 20px; font-weight: 700;"></p>
+            </div>
+            <div class="card" style="margin-bottom: 0;">
+                <h3 style="font-size: 14px; color: var(--text-light); text-transform: uppercase;">Fee Due</h3>
+                <p id="dashFeeDue" style="font-size: 20px; font-weight: 700;"></p>
+            </div>
+            <div class="card" style="margin-bottom: 0;">
+                <h3 style="font-size: 14px; color: var(--text-light); text-transform: uppercase;">Unread Messages</h3>
+                <p id="dashUnreadCount" style="font-size: 20px; font-weight: 700;"></p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Homework Due Today</h3>
+            <div id="dashHomeworkToday"></div>
+        </div>
+
+        <div class="card">
+            <h3>Upcoming Exams</h3>
+            <div id="dashUpcomingExams"></div>
+        </div>
+
+        <div class="card">
+            <h3>School Calendar Highlights</h3>
+            <div id="dashCalendar"></div>
+        </div>
+
+        <div class="card">
+            <h3>Latest Notifications</h3>
+            <div id="dashNotifications"></div>
+        </div>
+
+        <div class="card">
+            <h3>Recent Announcements</h3>
+            <div id="dashAnnouncements"></div>
+        </div>
+
+        <div class="card no-print">
+            <h3>Quick Links</h3>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn" onclick="switchTab('homework')"><i class="fas fa-tasks"></i> Homework</button>
+                <button class="btn" onclick="switchTab('exams')"><i class="fas fa-file-lines"></i> Exams</button>
+                <button class="btn" onclick="switchTab('fees')"><i class="fas fa-money-bill"></i> Fees</button>
+                <button class="btn" onclick="switchTab('messages')"><i class="fas fa-comments"></i> Messages</button>
+                <button class="btn" onclick="switchTab('announcements')"><i class="fas fa-bullhorn"></i> Announcements</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Attendance -->
-    <div class="tab-page" id="tab-attendance">
+    <div class="tab-page" id="tab-attendance" style="display: none;">
         <div class="card">
             <h3>Attendance</h3>
             <p id="attSummary" style="color: var(--text-light); margin-bottom: 12px;"></p>

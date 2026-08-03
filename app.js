@@ -323,6 +323,7 @@ const supabaseClient = window.supabase.createClient(
             await loadAttendance();
             await loadDashboardCharts();
             await updateUnreadMessageBadge();
+            await loadMessageInbox();
         }
 
         async function loadStudents() {
@@ -1760,6 +1761,61 @@ const supabaseClient = window.supabase.createClient(
         // messages this query can even see (a Teacher only sees messages
         // about their own classes) - so we don't need to repeat that
         // filtering logic here, just ask "how many unread, period".
+        /*
+            NEW: loadMessageInbox()
+            WHAT: fetches every UNREAD parent message (across every one of
+            this teacher's classes at once, thanks to RLS already limiting
+            what this query can even see), and shows them as a highlighted
+            list at the top of the Messages page - which student, which
+            class, a short preview, and when it was sent.
+            WHY this is separate from the class/student dropdowns below it:
+            those dropdowns require you to ALREADY know who messaged you.
+            The whole point of an inbox is you DON'T have to know that -
+            you just look at what's new.
+        */
+        async function loadMessageInbox() {
+            const { data, error } = await supabaseClient
+                .from('messages')
+                .select('id, body, created_at, student_id, students(full_name, class_id, classes(grade, section))')
+                .eq('school_id', CURRENT_SCHOOL_ID)
+                .eq('sender_role', 'parent')
+                .is('read_at', null)
+                .order('created_at', { ascending: false });
+
+            const inboxCard = document.getElementById('messageInboxCard');
+            if (error || !data || data.length === 0) {
+                inboxCard.style.display = 'none';
+                return;
+            }
+
+            inboxCard.style.display = 'block';
+            document.getElementById('messageInboxList').innerHTML = data.map(m => {
+                const studentName = m.students?.full_name || 'Unknown student';
+                const classLabel = m.students?.classes ? `Grade ${m.students.classes.grade}${m.students.classes.section ? '-' + m.students.classes.section : ''}` : 'N/A';
+                // Preview: first 60 characters of the message, so a long
+                // message doesn't blow up the inbox row's height.
+                const preview = m.body.length > 60 ? m.body.slice(0, 60) + '...' : m.body;
+                return `
+                    <div onclick="openInboxMessage('${m.students?.class_id}', '${m.student_id}')" style="cursor: pointer; padding: 12px; margin-bottom: 8px; background: #fef2f2; border-radius: 8px; border-left: 4px solid #dc2626;">
+                        <p style="margin: 0; font-weight: 600;">${studentName} <span style="font-weight: 400; color: var(--text-light);">(${classLabel})</span></p>
+                        <p style="margin: 4px 0 0 0; color: #555;">${preview}</p>
+                        <p style="margin: 4px 0 0 0; font-size: 0.75rem; color: var(--text-light);">${new Date(m.created_at).toLocaleString()}</p>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // NEW: clicking an inbox row - sets both dropdowns to match that
+        // message's class and student, then opens the thread exactly like
+        // manually picking them would. Reuses loadStudentsForMessages() and
+        // loadMessageThread() rather than duplicating that logic.
+        async function openInboxMessage(classId, studentId) {
+            document.getElementById('msgClassFilter').value = classId;
+            await loadStudentsForMessages();
+            document.getElementById('msgStudentFilter').value = studentId;
+            await loadMessageThread();
+        }
+
         async function updateUnreadMessageBadge() {
             const { count } = await supabaseClient
                 .from('messages')
@@ -1826,11 +1882,20 @@ const supabaseClient = window.supabase.createClient(
 
             // NEW: opening this thread means we've now seen every unread parent
             // message in it - mark them all read, then refresh the badge/banner
-            // so the red highlight clears once it's actually been looked at.
+            // and the inbox list so the highlight clears once it's actually
+            // been looked at. We now CHECK for an error here - this exact
+            // update used to fail silently because of a missing database
+            // permission, and nobody could tell because .update() doesn't
+            // throw just for "0 rows changed".
             const unreadIds = messages.filter(m => m.sender_role === 'parent' && !m.read_at).map(m => m.id);
             if (unreadIds.length > 0) {
-                await supabaseClient.from('messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
-                await updateUnreadMessageBadge();
+                const { error: markReadError } = await supabaseClient.from('messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+                if (markReadError) {
+                    console.error('Failed to mark messages as read:', markReadError.message);
+                } else {
+                    await updateUnreadMessageBadge();
+                    await loadMessageInbox();
+                }
             }
         }
 

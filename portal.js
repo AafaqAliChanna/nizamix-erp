@@ -167,12 +167,15 @@
             .maybeSingle();
 
         const photoImg = document.getElementById('dashChildPhoto');
+        const photoFallback = document.getElementById('dashChildPhotoFallback');
         photoImg.style.display = 'none';
+        photoFallback.style.display = 'flex';
         if (fullChild?.photo_path) {
             const { data: signed } = await supabaseClient.storage.from('student-photos').createSignedUrl(fullChild.photo_path, 3600);
             if (signed?.signedUrl) {
                 photoImg.src = signed.signedUrl;
                 photoImg.style.display = 'inline-block';
+                photoFallback.style.display = 'none';
             }
         }
 
@@ -187,11 +190,11 @@
 
         const attEl = document.getElementById('dashTodayAttendance');
         if (!todayAtt) {
-            attEl.textContent = 'Not marked yet';
-            attEl.style.color = 'var(--text-light)';
+            attEl.innerHTML = '<span class="badge badge-neutral">Not marked yet</span>';
+        } else if (todayAtt.status === 'present') {
+            attEl.innerHTML = '<span class="badge badge-success"><i class="fas fa-check"></i> Present</span>';
         } else {
-            attEl.textContent = todayAtt.status === 'present' ? 'Present' : 'Absent';
-            attEl.style.color = todayAtt.status === 'present' ? '#166534' : '#991b1b';
+            attEl.innerHTML = '<span class="badge badge-danger"><i class="fas fa-xmark"></i> Absent</span>';
         }
 
         // ---- Homework due today ----
@@ -204,8 +207,13 @@
             .eq('due_date', todayStr);
 
         document.getElementById('dashHomeworkToday').innerHTML = (dueTodayHw && dueTodayHw.length > 0)
-            ? dueTodayHw.map(h => `<p>📘 <strong>${h.title}</strong>${h.subject ? ' - ' + h.subject : ''}</p>`).join('')
-            : '<p class="empty-state">Nothing due today</p>';
+            ? dueTodayHw.map(h => `
+                <div class="feed-row">
+                    <div class="feed-icon"><i class="fas fa-book"></i></div>
+                    <div class="feed-text"><strong>${h.title}</strong>${h.subject ? '<div class="feed-sub">' + h.subject + '</div>' : ''}</div>
+                </div>
+            `).join('')
+            : '<p class="empty-state"><i class="fas fa-circle-check" style="color: var(--success); margin-right: 6px;"></i>Nothing due today</p>';
 
         // ---- Upcoming exams ----
         // "Upcoming" here means: exams for this class that don't have any
@@ -230,7 +238,12 @@
         }
 
         document.getElementById('dashUpcomingExams').innerHTML = upcomingExams.length > 0
-            ? upcomingExams.map(ex => `<p>📝 ${ex.name} (${ex.term})</p>`).join('')
+            ? upcomingExams.map(ex => `
+                <div class="feed-row">
+                    <div class="feed-icon"><i class="fas fa-file-lines"></i></div>
+                    <div class="feed-text">${ex.name}<div class="feed-sub">${ex.term}</div></div>
+                </div>
+            `).join('')
             : '<p class="empty-state">No upcoming exams - all graded, or none scheduled</p>';
 
         // ---- Fee due ----
@@ -244,11 +257,9 @@
         const feeDueEl = document.getElementById('dashFeeDue');
         if (unpaidInvoices && unpaidInvoices.length > 0) {
             const totalDue = unpaidInvoices.reduce((sum, inv) => sum + Number(inv.amount_due), 0);
-            feeDueEl.textContent = totalDue + ' (' + unpaidInvoices.length + ' month' + (unpaidInvoices.length > 1 ? 's' : '') + ')';
-            feeDueEl.style.color = '#991b1b';
+            feeDueEl.innerHTML = `<span style="color: var(--danger);">${totalDue}</span> <span style="font-size: 12px; font-weight: 500; color: var(--text-light);">(${unpaidInvoices.length} month${unpaidInvoices.length > 1 ? 's' : ''})</span>`;
         } else {
-            feeDueEl.textContent = 'All paid';
-            feeDueEl.style.color = '#166534';
+            feeDueEl.innerHTML = '<span style="color: var(--success);">All paid</span>';
         }
 
         // ---- Unread messages count ----
@@ -260,8 +271,7 @@
             .eq('sender_role', 'staff')
             .is('read_at', null);
 
-        document.getElementById('dashUnreadCount').textContent = unreadCount || 0;
-        document.getElementById('dashUnreadCount').style.color = (unreadCount && unreadCount > 0) ? '#991b1b' : '#166534';
+        document.getElementById('dashUnreadCount').innerHTML = `<span style="color: ${(unreadCount && unreadCount > 0) ? 'var(--danger)' : 'var(--success)'};">${unreadCount || 0}</span>`;
 
         // ---- School calendar highlights ----
         const { data: events } = await supabaseClient
@@ -273,7 +283,12 @@
             .limit(5);
 
         document.getElementById('dashCalendar').innerHTML = (events && events.length > 0)
-            ? events.map(e => `<p>📅 ${e.event_date} - ${e.title}</p>`).join('')
+            ? events.map(e => `
+                <div class="feed-row">
+                    <div class="feed-icon"><i class="fas fa-calendar-day"></i></div>
+                    <div class="feed-text">${e.title}<div class="feed-sub">${e.event_date}</div></div>
+                </div>
+            `).join('')
             : '<p class="empty-state">No upcoming events</p>';
 
         // ---- Recent announcements (just the latest 3, full list is its own tab) ----
@@ -285,7 +300,12 @@
             .limit(3);
 
         document.getElementById('dashAnnouncements').innerHTML = (recentAnnouncements && recentAnnouncements.length > 0)
-            ? recentAnnouncements.map(a => `<p>📢 ${a.title} <span style="color: var(--text-light); font-size: 12px;">(${new Date(a.created_at).toLocaleDateString()})</span></p>`).join('')
+            ? recentAnnouncements.map(a => `
+                <div class="feed-row">
+                    <div class="feed-icon"><i class="fas fa-bullhorn"></i></div>
+                    <div class="feed-text">${a.title}<div class="feed-sub">${new Date(a.created_at).toLocaleDateString()}</div></div>
+                </div>
+            `).join('')
             : '<p class="empty-state">No announcements yet</p>';
 
         // ---- Latest notifications: a merged, time-sorted feed ----
@@ -295,14 +315,19 @@
         // item gets a "kind" and its own timestamp, then everything gets
         // sorted together by how recent it is.
         const notifications = [];
-        if (unreadCount > 0) notifications.push({ time: new Date(), text: `You have ${unreadCount} unread message(s) from the school`, icon: '💬' });
-        if (dueTodayHw && dueTodayHw.length > 0) notifications.push({ time: new Date(), text: `${dueTodayHw.length} homework item(s) due today`, icon: '📘' });
-        (recentAnnouncements || []).slice(0, 2).forEach(a => notifications.push({ time: new Date(a.created_at), text: `New announcement: ${a.title}`, icon: '📢' }));
+        if (unreadCount > 0) notifications.push({ time: new Date(), text: `You have ${unreadCount} unread message(s) from the school`, icon: 'fas fa-comment' });
+        if (dueTodayHw && dueTodayHw.length > 0) notifications.push({ time: new Date(), text: `${dueTodayHw.length} homework item(s) due today`, icon: 'fas fa-book' });
+        (recentAnnouncements || []).slice(0, 2).forEach(a => notifications.push({ time: new Date(a.created_at), text: `New announcement: ${a.title}`, icon: 'fas fa-bullhorn' }));
 
         notifications.sort((a, b) => b.time - a.time);
 
         document.getElementById('dashNotifications').innerHTML = notifications.length > 0
-            ? notifications.map(n => `<p>${n.icon} ${n.text}</p>`).join('')
+            ? notifications.map(n => `
+                <div class="feed-row">
+                    <div class="feed-icon"><i class="${n.icon}"></i></div>
+                    <div class="feed-text">${n.text}</div>
+                </div>
+            `).join('')
             : '<p class="empty-state">Nothing new right now</p>';
     }
 
@@ -359,16 +384,22 @@
             return { hw, sub };
         }));
 
-        document.getElementById('homeworkList').innerHTML = rows.map(({ hw, sub }) => `
-            <tr>
-                <td>${hw.title}</td>
-                <td>${hw.subject || 'N/A'}</td>
-                <td>${hw.due_date}</td>
-                <td>${sub?.status || 'pending'}</td>
-                <td>${sub?.marks_obtained ?? 'N/A'}</td>
-                <td>${sub?.feedback || 'N/A'}</td>
-            </tr>
-        `).join('');
+        document.getElementById('homeworkList').innerHTML = rows.map(({ hw, sub }) => {
+            const status = sub?.status || 'pending';
+            const statusBadge = status === 'submitted' ? '<span class="badge badge-success">Submitted</span>'
+                : status === 'late' ? '<span class="badge badge-warning">Late</span>'
+                : '<span class="badge badge-neutral">Pending</span>';
+            return `
+                <tr>
+                    <td>${hw.title}</td>
+                    <td>${hw.subject || 'N/A'}</td>
+                    <td>${hw.due_date}</td>
+                    <td>${statusBadge}</td>
+                    <td>${sub?.marks_obtained ?? 'N/A'}</td>
+                    <td>${sub?.feedback || 'N/A'}</td>
+                </tr>
+            `;
+        }).join('');
     }
 
     // ---- Exams / report cards ----
@@ -451,7 +482,7 @@
             <tr>
                 <td>${inv.month}</td>
                 <td>${inv.amount_due}</td>
-                <td style="color: ${inv.paid ? '#166534' : '#991b1b'}; font-weight: 600;">${inv.paid ? 'Paid' : 'Unpaid'}</td>
+                <td>${inv.paid ? '<span class="badge badge-success"><i class="fas fa-check"></i> Paid</span>' : '<span class="badge badge-danger"><i class="fas fa-xmark"></i> Unpaid</span>'}</td>
             </tr>
         `).join('');
     }

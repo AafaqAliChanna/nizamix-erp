@@ -10,6 +10,7 @@
     let CURRENT_SCHOOL_ID = null;
     let CURRENT_SCHOOL_NAME = '';
     let CURRENT_PARENT_NAME = '';
+    let CURRENT_SHOW_RANK = true;
     let children = []; // [{id, full_name, class_id, ...}]
     let currentChildId = null;
     let attChartInstance = null;
@@ -45,10 +46,11 @@
 
         const { data: schoolRow } = await supabaseClient
             .from('schools')
-            .select('name')
+            .select('name, show_rank')
             .eq('id', CURRENT_SCHOOL_ID)
             .maybeSingle();
         CURRENT_SCHOOL_NAME = schoolRow?.name || 'School';
+        CURRENT_SHOW_RANK = schoolRow?.show_rank ?? true;
 
         const { data: childRows } = await supabaseClient
             .from('students')
@@ -404,37 +406,93 @@
 
     // ---- Exams / report cards ----
     async function loadExamsTab() {
-        const child = children.find(c => c.id === currentChildId);
-        const { data } = await supabaseClient
-            .from('exams')
-            .select('id, name, term, academic_year')
-            .eq('school_id', CURRENT_SCHOOL_ID)
-            .eq('class_id', child.class_id)
-            .order('created_at', { ascending: false });
+        // NEW: this used to look up exams by the child's CURRENT class,
+        // which silently lost every previous year's exam once a child got
+        // promoted (promotion changes class_id, so the old class's exams
+        // stopped matching). This now looks up exams through the child's
+        // OWN exam_results instead - which stay attached to the child
+        // forever, no matter how many times they get promoted.
+        const { data: resultRows } = await supabaseClient
+            .from('exam_results')
+            .select('exam_id, exams(id, name, term, academic_year, classes(grade, section))')
+            .eq('student_id', currentChildId);
 
-        const exams = data || [];
-        if (exams.length === 0) {
-            document.getElementById('examsList').innerHTML = '<tr><td colspan="3" class="empty-state">No exams recorded yet</td></tr>';
+        // exam_results has one row PER SUBJECT, so the same exam shows up
+        // several times here - this collapses it down to one entry per exam.
+        const examsMap = {};
+        (resultRows || []).forEach(r => { if (r.exams) examsMap[r.exam_id] = r.exams; });
+        const allExams = Object.values(examsMap);
+
+        const years = [...new Set(allExams.map(e => e.academic_year))].sort().reverse();
+        const yearSelect = document.getElementById('examsYearFilter');
+        const previousSelection = yearSelect.value;
+
+        if (years.length === 0) {
+            yearSelect.innerHTML = '<option value="">No results yet</option>';
+            document.getElementById('examsList').innerHTML = '<tr><td colspan="4" class="empty-state">No exam results recorded yet</td></tr>';
             return;
         }
 
-        document.getElementById('examsList').innerHTML = exams.map(ex => `
-            <tr>
-                <td>${ex.name}</td>
-                <td>${ex.term} (${ex.academic_year})</td>
-                <td><button class="btn btn-primary" onclick="viewReportCard('${ex.id}', '${ex.name.replace(/'/g, "\\'")}', '${ex.term}')">View Report Card</button></td>
-            </tr>
-        `).join('');
+        yearSelect.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
+        // Keep whatever year was already selected if it's still valid for
+        // this child (e.g. switching between siblings), otherwise default
+        // to the most recent year - most parents want THIS year first.
+        yearSelect.value = years.includes(previousSelection) ? previousSelection : years[0];
+
+        const exams = allExams
+            .filter(e => e.academic_year === yearSelect.value)
+            .sort((a, b) => (a.term || '').localeCompare(b.term || ''));
+
+        if (exams.length === 0) {
+            document.getElementById('examsList').innerHTML = '<tr><td colspan="4" class="empty-state">No exams for this year</td></tr>';
+            return;
+        }
+
+        document.getElementById('examsList').innerHTML = exams.map(ex => {
+            const classLabel = ex.classes ? `Grade ${ex.classes.grade}${ex.classes.section ? '-' + ex.classes.section : ''}` : 'N/A';
+            return `
+                <tr>
+                    <td>${ex.name}</td>
+                    <td>${ex.term}</td>
+                    <td>${classLabel}</td>
+                    <td><button class="btn btn-primary" onclick="viewReportCard('${ex.id}', '${ex.name.replace(/'/g, "\\'")}', '${ex.term}')">View Report Card</button></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // Same letter-grade bands used on the staff side, kept consistent so a
+    // report card means the same thing wherever it's printed from.
+    function gradeFor(percentage) {
+        if (percentage >= 80) return 'A';
+        if (percentage >= 70) return 'B';
+        if (percentage >= 60) return 'C';
+        if (percentage >= 50) return 'D';
+        return 'F';
+    }
+
+    // Turns a percentage into a 4.0-scale grade point, matching the same
+    // A/B/C/D/F bands as gradeFor() - so a GPA of 4.0 always means "all A's".
+    function gradePointFor(percentage) {
+        if (percentage >= 80) return 4.0;
+        if (percentage >= 70) return 3.0;
+        if (percentage >= 60) return 2.0;
+        if (percentage >= 50) return 1.0;
+        return 0.0;
     }
 
     // Read-only version of the staff report card - same idea (subjects,
-    // total, percentage), but no editing, no remarks box (parents can only
-    // VIEW remarks the teacher already wrote, not add their own).
+    // total, percentage, grade, rank), but no editing, no remarks box
+    // (parents can only VIEW remarks the teacher already wrote, not add
+    // their own).
     async function viewReportCard(examId, examName, term) {
         const child = children.find(c => c.id === currentChildId);
-        const [resultsRes, remarksRes] = await Promise.all([
+        const [resultsRes, remarksRes, rankRes] = await Promise.all([
             supabaseClient.from('exam_results').select('subject, marks_obtained, total_marks').eq('exam_id', examId).eq('student_id', currentChildId),
-            supabaseClient.from('exam_remarks').select('remarks').eq('exam_id', examId).eq('student_id', currentChildId).maybeSingle()
+            supabaseClient.from('exam_remarks').select('remarks').eq('exam_id', examId).eq('student_id', currentChildId).maybeSingle(),
+            // NEW: rank comes from the database function, never from raw
+            // data fetched here - see exam_rank_function.sql for why.
+            supabaseClient.rpc('get_exam_rank', { p_exam_id: examId, p_student_id: currentChildId })
         ]);
 
         const results = resultsRes.data || [];
@@ -445,7 +503,25 @@
 
         const totalObtained = results.reduce((s, r) => s + Number(r.marks_obtained), 0);
         const totalMax = results.reduce((s, r) => s + Number(r.total_marks), 0);
-        const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(1) : '0.0';
+        const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100) : 0;
+        const grade = gradeFor(percentage);
+
+        // NEW: GPA - average the grade POINT of each individual subject
+        // (not just one grade point for the overall percentage), which is
+        // the standard way GPA works: each subject counts on its own,
+        // then they're averaged together.
+        const gpa = (results.reduce((sum, r) => {
+            const subjectPct = Number(r.total_marks) > 0 ? (Number(r.marks_obtained) / Number(r.total_marks)) * 100 : 0;
+            return sum + gradePointFor(subjectPct);
+        }, 0) / results.length).toFixed(2);
+
+        // Rank: "(if enabled)" in practice means "if it could be computed" -
+        // if the database function returned nothing (e.g. an error, or this
+        // exam somehow has only one student), we just don't show a rank
+        // line instead of showing a broken one.
+        const rankRow = (rankRes.data && rankRes.data.length > 0)
+            ? `<p style="margin-top: 8px;">Rank: ${rankRes.data[0].student_rank} of ${rankRes.data[0].total_students}</p>`
+            : '';
 
         document.getElementById('printContent').innerHTML = `
             <div style="text-align: center; margin-bottom: 24px; border-bottom: 2px solid #333; padding-bottom: 16px;">
@@ -457,7 +533,8 @@
                 <thead><tr style="border-bottom: 2px solid #333;"><th style="text-align:left; padding:8px;">Subject</th><th style="text-align:right; padding:8px;">Marks</th><th style="text-align:right; padding:8px;">Total</th></tr></thead>
                 <tbody>${results.map(r => `<tr><td style="padding:8px;">${r.subject}</td><td style="text-align:right; padding:8px;">${r.marks_obtained}</td><td style="text-align:right; padding:8px;">${r.total_marks}</td></tr>`).join('')}</tbody>
             </table>
-            <p style="margin-top: 16px; font-size: 18px; font-weight: 700;">Total: ${totalObtained}/${totalMax} (${percentage}%)</p>
+            <p style="margin-top: 16px; font-size: 18px; font-weight: 700;">Total: ${totalObtained}/${totalMax} (${percentage.toFixed(1)}%) &nbsp;|&nbsp; Grade: ${grade} &nbsp;|&nbsp; GPA: ${gpa}</p>
+            ${rankRow}
             <p style="margin-top: 8px;">Remarks: ${remarksRes.data?.remarks || 'None'}</p>
         `;
         document.getElementById('printOverlay').style.display = 'block';

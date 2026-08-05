@@ -9,6 +9,9 @@ const supabaseClient = window.supabase.createClient(
         let CURRENT_SCHOOL_NAME = '';
         let CURRENT_STAFF_NAME = '';
         let CURRENT_STAFF_ROLE = '';
+        // NEW: whether report cards show class rank - a whole-school setting,
+        // toggled by the Principal on the Exams page. Defaults true.
+        let CURRENT_SHOW_RANK = true;
         // Matches the DB default on students/attendance/timetable.academic_year.
         // Change this one line at the start of a new school year.
         const CURRENT_ACADEMIC_YEAR = '2026-2027';
@@ -43,11 +46,12 @@ const supabaseClient = window.supabase.createClient(
 
             const { data: schoolRow } = await supabaseClient
                 .from('schools')
-                .select('name')
+                .select('name, show_rank')
                 .eq('id', CURRENT_SCHOOL_ID)
                 .maybeSingle();
 
             CURRENT_SCHOOL_NAME = schoolRow?.name || 'School';
+            CURRENT_SHOW_RANK = schoolRow?.show_rank ?? true;
 
             setSchoolBranding();
             return true;
@@ -2014,6 +2018,27 @@ const supabaseClient = window.supabase.createClient(
             document.getElementById('examClassFilter').innerHTML =
                 '<option value="">Select a class...</option>' +
                 (data || []).map(c => `<option value="${c.id}">Grade ${c.grade}${c.section ? '-' + c.section : ''}</option>`).join('');
+
+            // NEW: only a Principal can see/flip the rank toggle - matches
+            // CURRENT_SHOW_RANK, which was already fetched at login.
+            document.getElementById('showRankToggleRow').style.display = CURRENT_STAFF_ROLE === 'Principal' ? 'block' : 'none';
+            document.getElementById('showRankToggle').checked = CURRENT_SHOW_RANK;
+        }
+
+        // NEW: flips the whole-school rank setting. RLS will reject this for
+        // anyone who isn't a Principal, matching the schools table's
+        // existing update rules.
+        async function toggleShowRank() {
+            const newValue = document.getElementById('showRankToggle').checked;
+            const { error } = await supabaseClient.from('schools').update({ show_rank: newValue }).eq('id', CURRENT_SCHOOL_ID);
+
+            if (error) {
+                alert('Error updating setting: ' + error.message);
+                document.getElementById('showRankToggle').checked = !newValue; // revert the checkbox
+                return;
+            }
+
+            CURRENT_SHOW_RANK = newValue;
         }
 
         async function loadExamsForClass() {
@@ -2260,6 +2285,19 @@ const supabaseClient = window.supabase.createClient(
             return 'F';
         }
 
+        // Turns a percentage into a 4.0-scale grade point, matching the same
+        // A/B/C/D/F bands as gradeFor() - so a GPA of 4.0 always means "all
+        // A's". Named and banded to exactly match gradePointFor() in
+        // portal.js - a student's GPA must mean the same thing whether a
+        // teacher prints it here or a parent views it in the portal.
+        function gradePointFor(percentage) {
+            if (percentage >= 80) return 4.0;
+            if (percentage >= 70) return 3.0;
+            if (percentage >= 60) return 2.0;
+            if (percentage >= 50) return 1.0;
+            return 0.0;
+        }
+
         let currentReportCardStudentId = null;
 
         async function openReportCard(studentId, studentName) {
@@ -2281,112 +2319,42 @@ const supabaseClient = window.supabase.createClient(
             const totalMax = results.reduce((sum, r) => sum + Number(r.total_marks), 0);
             const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(1) : '0.0';
 
+            // NEW: GPA - average the grade POINT of each individual subject
+            // (not one grade point for the overall percentage) - the
+            // standard way GPA works, and the exact same math the parent
+            // portal uses in gradePointFor(), so a student's GPA reads the
+            // same whether a teacher prints it here or a parent views it.
+            const gpa = (results.reduce((sum, r) => {
+                const subjectPct = Number(r.total_marks) > 0 ? (Number(r.marks_obtained) / Number(r.total_marks)) * 100 : 0;
+                return sum + gradePointFor(subjectPct);
+            }, 0) / results.length).toFixed(2);
+
             /*
-                =====================================================================
-                NEW: CLASS RANK - explained super simply, step by step.
-                =====================================================================
-
-                Goal: figure out where THIS student stands compared to their
-                classmates for THIS exam. Like a race - who came 1st, 2nd, 3rd...?
-
-                To do that, we can't just look at one student. We need to see
-                EVERYONE's marks for this exam, add up each person's total, and
-                then line everyone up from highest total to lowest total. Wherever
-                our student lands in that line-up IS their rank.
-
-                Step 1: Ask Supabase for every mark, for every student, for this
-                        one exam (currentExamId). Not just our one student this
-                        time - literally everybody who has marks saved for it.
+                NEW: CLASS RANK - now via a shared database function
+                (get_exam_rank, see exam_rank_function.sql) instead of
+                fetching every student's marks here and ranking them in the
+                browser. WHY switch: that RPC function is the exact same one
+                the parent portal already calls - using it here too means
+                rank is computed ONE way, in ONE place, so it can never
+                quietly disagree between what a teacher sees and what a
+                parent sees. It also properly handles tied scores (two
+                students both "3rd") using SQL's rank() function, which the
+                old browser-side version didn't do as precisely.
             */
-            const { data: allExamResults, error: rankError } = await supabaseClient
-                .from('exam_results')
-                .select('student_id, marks_obtained, total_marks')
-                .eq('exam_id', currentExamId);
-
+            document.getElementById('rcRankRow').style.display = CURRENT_SHOW_RANK ? 'block' : 'none';
             let rankText = 'Not available';
 
-            // If something went wrong fetching the data, we just skip showing a
-            // rank instead of crashing the whole report card - the marks and
-            // grade above still matter more than the rank does.
-            if (!rankError && allExamResults) {
-                /*
-                    Step 2: We have a big flat list like:
-                        [ {student A, Math, 80/100}, {student A, English, 70/100},
-                          {student B, Math, 90/100}, {student B, English, 60/100}, ... ]
-
-                    We need to SQUASH this down into one total per student:
-                        student A -> 150 obtained out of 200
-                        student B -> 150 obtained out of 200
-
-                    A plain JavaScript object works like a set of labeled boxes -
-                    one box per student_id - where we keep adding numbers in as we
-                    go through the list, one row at a time.
-                */
-                const totalsByStudent = {};
-                allExamResults.forEach(r => {
-                    if (!totalsByStudent[r.student_id]) {
-                        totalsByStudent[r.student_id] = { obtained: 0, total: 0 };
-                    }
-                    totalsByStudent[r.student_id].obtained += Number(r.marks_obtained);
-                    totalsByStudent[r.student_id].total += Number(r.total_marks);
+            if (CURRENT_SHOW_RANK) {
+                const { data: rankData, error: rankError } = await supabaseClient.rpc('get_exam_rank', {
+                    p_exam_id: currentExamId,
+                    p_student_id: studentId
                 });
-
-                /*
-                    Step 3: Turn those "boxes" into one plain list of numbers - just
-                    each student's PERCENTAGE (not raw marks, since two students
-                    might not have marks saved for the exact same subjects yet -
-                    percentage is the fair way to compare everyone).
-
-                    Object.values(...) just means "give me all the boxes' contents
-                    as a list, ignore the labels" - we don't need to know WHOSE
-                    percentage is whose for this step, just the numbers themselves.
-                */
-                const allPercentages = Object.values(totalsByStudent).map(t =>
-                    t.total > 0 ? (t.obtained / t.total) * 100 : 0
-                );
-
-                /*
-                    Step 4: Sort that list from HIGHEST to LOWEST.
-                    (a, b) => b - a is the standard JavaScript way to say
-                    "biggest number first" instead of the default smallest-first.
-
-                    Now the list looks like: [95, 88, 75, 60, 40] for example -
-                    a straight-up leaderboard.
-                */
-                allPercentages.sort((a, b) => b - a);
-
-                /*
-                    Step 5: Find OUR student's percentage in that sorted
-                    leaderboard, and use its position as the rank.
-
-                    IMPORTANT gotcha: up above, "percentage" was rounded to 1
-                    decimal place for DISPLAY (e.g. "83.3"). But the numbers in
-                    our leaderboard are NOT rounded - computers keep way more
-                    decimal places internally (e.g. 83.33333333333334). If we
-                    compared the rounded display version against the unrounded
-                    leaderboard, they'd almost never match exactly, and we'd
-                    fail to find our own student in their own leaderboard!
-
-                    So here we redo the SAME unrounded math (obtained ÷ total)
-                    one more time, so both sides of the comparison are unrounded
-                    and actually match.
-
-                    indexOf() finds the first matching number and tells us WHERE
-                    in the list it is - but computers start counting positions
-                    from 0, not 1 (position 0 = 1st place, position 1 = 2nd place,
-                    etc). So we add +1 at the end to turn "computer counting" into
-                    "human counting" (1st, 2nd, 3rd...).
-                */
-                const myRawPercentage = totalMax > 0 ? (totalObtained / totalMax) * 100 : 0;
-                const position = allPercentages.indexOf(myRawPercentage);
-                const rank = position + 1;
-                const totalStudentsInExam = allPercentages.length;
-
-                rankText = `${rank} of ${totalStudentsInExam}`;
+                if (!rankError && rankData && rankData.length > 0) {
+                    rankText = `${rankData[0].student_rank} of ${rankData[0].total_students}`;
+                }
             }
 
             document.getElementById('rcRank').textContent = rankText;
-            // ===================== END of the new rank code =====================
 
             // Attendance % for the year, independent of the exam itself.
             const attendanceRecords = attendanceRes.data || [];
@@ -2408,6 +2376,7 @@ const supabaseClient = window.supabase.createClient(
             document.getElementById('rcTotalObtained').textContent = totalObtained;
             document.getElementById('rcTotalMax').textContent = totalMax;
             document.getElementById('rcPercentage').textContent = percentage;
+            document.getElementById('rcGpa').textContent = gpa;
             document.getElementById('rcGrade').textContent = gradeFor(Number(percentage));
             const passed = Number(percentage) >= PASSING_PERCENTAGE;
             const passFailEl = document.getElementById('rcPassFail');

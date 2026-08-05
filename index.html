@@ -1363,6 +1363,24 @@
                         <p style="color: var(--text-light); margin: 5px 0 0 0;">Enter marks and generate report cards</p>
                     </div>
 
+                    <!--
+                        NEW: Show Class Rank toggle - Principal only, hidden
+                        for anyone else (see loadExamsForClass in app.js).
+                        WHAT: a whole-school on/off switch for whether report
+                        cards display a student's class rank at all.
+                        WHY some schools want this OFF: rank can turn grades
+                        into a competition between kids, which not every
+                        school wants to encourage. Turning it off here hides
+                        it everywhere a report card is shown - staff AND the
+                        parent portal - not just in one place.
+                    -->
+                    <div id="showRankToggleRow" class="table-container" style="margin-bottom: 24px; display: none;">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="showRankToggle" onchange="toggleShowRank()">
+                            <span>Show class rank on report cards (school-wide setting)</span>
+                        </label>
+                    </div>
+
                     <div class="table-container" style="margin-bottom: 24px;">
                         <div class="input-group">
                             <select id="examClassFilter" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;" onchange="loadExamsForClass()"></select>
@@ -1460,8 +1478,8 @@
                             Think of this <span> as an empty box with a label ("rcRank")
                             taped on it, so JavaScript knows exactly which box to fill.
                         -->
-                        <p style="font-size: 14px; color: #555; font-weight: 600;">Class Rank: <span id="rcRank"></span></p>
-                        <p style="margin-top: 16px; font-size: 18px; font-weight: 700;">Percentage: <span id="rcPercentage"></span>% &nbsp;|&nbsp; Grade: <span id="rcGrade"></span> &nbsp;|&nbsp; Status: <span id="rcPassFail"></span></p>
+                        <p id="rcRankRow" style="font-size: 14px; color: #555; font-weight: 600;">Class Rank: <span id="rcRank"></span></p>
+                        <p style="margin-top: 16px; font-size: 18px; font-weight: 700;">Percentage: <span id="rcPercentage"></span>% &nbsp;|&nbsp; GPA: <span id="rcGpa"></span> &nbsp;|&nbsp; Grade: <span id="rcGrade"></span> &nbsp;|&nbsp; Status: <span id="rcPassFail"></span></p>
                         <p style="font-size: 14px; color: #555;">Attendance this year: <span id="rcAttendance"></span></p>
                         <div style="margin-top: 20px;">
                             <label style="font-weight: 600; display: block; margin-bottom: 6px;">Remarks</label>

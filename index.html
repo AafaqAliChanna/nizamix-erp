@@ -803,6 +803,12 @@
                         </div>
                     </div>
 
+                    <!-- NEW: search filters the table below as you type, by name
+                         or roll number - no re-query, just hides non-matching rows. -->
+                    <div class="table-container" style="margin-bottom: 16px;">
+                        <input id="studentSearchInput" placeholder="Search by name or roll number..." oninput="filterTableRows('studentSearchInput', 'studentsList')" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                    </div>
+
                     <div class="table-container">
                         <table>
                             <thead>
@@ -827,6 +833,11 @@
                     <div style="margin-bottom: 30px;">
                         <h2 style="margin: 0;">Staff Directory</h2>
                         <p style="color: var(--text-light); margin: 5px 0 0 0;">School staff information</p>
+                    </div>
+
+                    <!-- NEW: search by name or role (Teacher/Principal) -->
+                    <div class="table-container" style="margin-bottom: 16px;">
+                        <input id="staffSearchInput" placeholder="Search by name or role..." oninput="filterTableRows('staffSearchInput', 'staffList')" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
                     </div>
 
                     <div class="table-container">
@@ -947,6 +958,10 @@
                                     <i class="fas fa-check"></i> Save Attendance
                                 </button>
                             </div>
+                        </div>
+                        <!-- NEW: search this class's roster by name or roll number -->
+                        <div class="table-container" style="margin-bottom: 16px;">
+                            <input id="classStudentsSearchInput" placeholder="Search by name or roll number..." oninput="filterTableRows('classStudentsSearchInput', 'classStudentsList')" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
                         </div>
                         <div class="table-container">
                             <table>
@@ -1781,6 +1796,11 @@
                                 <i class="fas fa-check"></i> Save Attendance
                             </button>
                         </div>
+                    </div>
+
+                    <!-- NEW: search by name or roll number while marking attendance -->
+                    <div class="table-container" style="margin-bottom: 16px;">
+                        <input id="attendanceMarkSearchInput" placeholder="Search by name or roll number..." oninput="filterTableRows('attendanceMarkSearchInput', 'attendanceMarkList')" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px;">
                     </div>
 
                     <!-- Students of the selected class, filled by loadAttendanceClassStudents() -->

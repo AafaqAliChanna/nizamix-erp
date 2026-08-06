@@ -302,6 +302,36 @@ const supabaseClient = window.supabase.createClient(
             document.getElementById('dashMySubjects').textContent = `Classes: ${classesText}. Subjects: ${subjectsText}.`;
         }
 
+        /*
+            NEW: filterTableRows(inputId, tableBodyId)
+            WHAT: a single, reusable search box behavior - used by every
+            "search students" or "search staff" box across the app (Students
+            page, Staff page, a class's roster, the Attendance mark list).
+            WHY one shared function instead of writing this four times: it's
+            the exact same idea everywhere - type something, hide rows that
+            don't match, show the ones that do. One version means one place
+            to fix if something's ever wrong with it, instead of four
+            slightly-different copies quietly drifting apart over time.
+
+            HOW it works: row.textContent grabs ALL the visible text inside
+            one table row (name, roll number, class, role - whatever columns
+            that particular table has) as one big string, lowercased so
+            "Ali" and "ali" match the same way. If the search box's text is
+            found ANYWHERE in that row's text, the row stays visible;
+            otherwise it's hidden. This is why the SAME function works for
+            "search by name or roll number" on Students and "search by name
+            or role" on Staff - it doesn't care which column matched, just
+            whether the row contains the typed text somewhere.
+        */
+        function filterTableRows(inputId, tableBodyId) {
+            const term = document.getElementById(inputId).value.trim().toLowerCase();
+            const rows = document.querySelectorAll(`#${tableBodyId} tr`);
+            rows.forEach(row => {
+                const rowText = row.textContent.toLowerCase();
+                row.style.display = rowText.includes(term) ? '' : 'none';
+            });
+        }
+
         async function loadData() {
             // NEW (Step 4): load real classes before students, so the class
             // dropdown in "Add Student" is ready before anyone opens that form.
@@ -793,7 +823,7 @@ const supabaseClient = window.supabase.createClient(
         async function loadTimetableGrid(classId) {
             const { data, error } = await supabaseClient
                 .from('timetable')
-                .select('day_of_week, period_number, subject, staff_id')
+                .select('day_of_week, period_number, subject, staff_id, room, online_link')
                 .eq('school_id', CURRENT_SCHOOL_ID)
                 .eq('class_id', classId)
                 .eq('academic_year', CURRENT_ACADEMIC_YEAR);
@@ -812,14 +842,23 @@ const supabaseClient = window.supabase.createClient(
                 for (const day of DAYS) {
                     const entry = existing[`${day.num}-${period}`];
                     rows += `
-                        <td data-day="${day.num}" data-period="${period}" style="min-width: 160px;">
-                            <input type="text" placeholder="Subject" value="${entry?.subject || ''}"
+                        <td data-day="${day.num}" data-period="${period}" style="min-width: 170px;">
+                            <input type="text" class="tt-subject" placeholder="Subject" value="${entry?.subject || ''}"
                                 style="width: 100%; margin-bottom: 4px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;"
                                 onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
-                            <select style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;"
+                            <select class="tt-teacher" style="width: 100%; margin-bottom: 4px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;"
                                 onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
                                 ${staffOptionsHtml(entry?.staff_id)}
                             </select>
+                            <!-- NEW: Room + Online Link - both optional, so an
+                                 empty one just means "not set" rather than
+                                 blocking the whole cell from saving. -->
+                            <input type="text" class="tt-room" placeholder="Room, e.g. 204" value="${entry?.room || ''}"
+                                style="width: 100%; margin-bottom: 4px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px;"
+                                onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
+                            <input type="text" class="tt-link" placeholder="Online link (optional)" value="${entry?.online_link || ''}"
+                                style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px;"
+                                onchange="saveTimetableCell('${classId}', ${day.num}, ${period})">
                         </td>
                     `;
                 }
@@ -830,8 +869,10 @@ const supabaseClient = window.supabase.createClient(
 
         async function saveTimetableCell(classId, day, period) {
             const cell = document.querySelector(`#timetableGridBody td[data-day="${day}"][data-period="${period}"]`);
-            const subject = cell.querySelector('input').value.trim();
-            const staffId = cell.querySelector('select').value;
+            const subject = cell.querySelector('.tt-subject').value.trim();
+            const staffId = cell.querySelector('.tt-teacher').value;
+            const room = cell.querySelector('.tt-room').value.trim();
+            const onlineLink = cell.querySelector('.tt-link').value.trim();
 
             // Both empty - nothing to save, and clear any existing entry for this slot.
             if (!subject && !staffId) {
@@ -856,6 +897,8 @@ const supabaseClient = window.supabase.createClient(
                 class_id: classId,
                 staff_id: staffId,
                 subject: subject,
+                room: room || null,
+                online_link: onlineLink || null,
                 day_of_week: day,
                 period_number: period,
                 academic_year: CURRENT_ACADEMIC_YEAR

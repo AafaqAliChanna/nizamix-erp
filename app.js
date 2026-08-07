@@ -2607,7 +2607,7 @@ const supabaseClient = window.supabase.createClient(
                 <tr data-invoice-id="${inv.id}" data-due="${inv.amount_due}" data-paid="${inv.paid}">
                     <td style="font-weight: 500;">${inv.students.full_name}</td>
                     <td>${inv.amount_due}</td>
-                    <td style="color: ${inv.paid ? '#166534' : '#991b1b'}; font-weight: 600;">${inv.paid ? 'Paid' : 'Unpaid'}</td>
+                    <td>${inv.paid ? '<span class="badge badge-success"><i class="fas fa-check"></i> Paid</span>' : '<span class="badge badge-danger"><i class="fas fa-xmark"></i> Unpaid</span>'}</td>
                     <td>
                         ${inv.paid
                             ? `<button class="btn" onclick="setInvoicePaidStatus('${inv.id}', false)">Mark Unpaid</button>`
@@ -2714,7 +2714,7 @@ const supabaseClient = window.supabase.createClient(
                     <tr>
                         <td style="font-weight: 500;">${a.students.full_name}</td>
                         <td style="color: var(--text-light); font-family: monospace;">${a.date}</td>
-                        <td><span style="background: ${a.status === 'present' ? '#dcfce7' : '#fee2e2'}; color: ${a.status === 'present' ? '#166534' : '#991b1b'}; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; text-transform: capitalize;">${a.status}</span></td>
+                        <td><span class="badge ${a.status === 'present' ? 'badge-success' : 'badge-danger'}">${a.status}</span></td>
                     </tr>
                 `).join('');
         }
